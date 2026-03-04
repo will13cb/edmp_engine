@@ -1,0 +1,209 @@
+// ===========================
+// Event-Driven Market Probability Engine ERD (Entity-Relationship Diagram)
+// DBML (database markup language)
+// Schemas: raw, staging, analytics
+// ===========================
+
+Table raw.assets {
+  symbol        text [pk]          // raw uses symbol as business key
+  name          text
+  asset_type    text               // etf, equity, bond, crypto, fx
+  currency      text
+  exchange      text
+  source        text
+  ingested_at   timestamptz
+}
+
+Table staging.assets {
+  asset_id      bigint [pk, increment]
+  symbol        text [unique, not null]
+  name          text
+  asset_type    text
+  currency      text
+  exchange      text
+  active        boolean
+  first_seen_at timestamptz
+  last_seen_at  timestamptz
+}
+
+Table raw.prices_daily {
+  symbol        text [not null]
+  trading_date  date [not null]
+  open          double
+  high          double
+  low           double
+  close         double
+  adj_close     double
+  volume        double
+  source        text
+  ingested_at   timestamptz
+
+  Indexes {
+    (symbol, trading_date) [unique] // raw de-dupe key
+  }
+}
+
+Table staging.prices_daily {
+  asset_id      bigint [not null]
+  trading_date  date [not null]
+  open          double
+  high          double
+  low           double
+  close         double
+  adj_close     double
+  volume        double
+  source        text
+  loaded_at     timestamptz
+
+  Indexes {
+    (asset_id, trading_date) [pk]   // warehouse key
+  }
+}
+
+Table raw.events {
+  event_type    text [not null]     // CPI, FOMC, Earnings, Geo, Speech...
+  event_ts      timestamptz [not null]
+  event_date    date                // effective trading date (after alignment)
+  title         text
+  country       text
+  source        text
+
+  actual        double              // optional numeric events (CPI, etc.)
+  forecast      double
+  previous      double
+
+  raw_text      text                // optional
+  ingested_at   timestamptz
+
+  Indexes {
+    (event_ts) 
+  }
+}
+
+Table staging.events {
+  event_id      bigint [pk, increment]
+  event_type    text [not null]
+  event_ts      timestamptz [not null]
+  event_date    date [not null]     // must be set here
+  title         text
+  country       text
+  source        text
+
+  actual        double
+  forecast      double
+  previous      double
+
+  surprise      double              // actual - forecast
+  surprise_pct  double              // surprise / abs(forecast) or similar
+  cleaned_text  text
+  loaded_at     timestamptz
+
+  Indexes {
+    (event_date, event_type)
+  }
+}
+
+// Map which assets are “affected” by an event
+Table staging.event_asset_map {
+  event_id      bigint [not null]
+  asset_id      bigint [not null]
+  weight        double
+
+  Indexes {
+    (event_id, asset_id) [pk]
+  }
+}
+
+// ---------- ANALYTICS LAYER ----------
+
+Table analytics.features_daily {
+  asset_id       bigint [not null]
+  trading_date   date [not null]
+
+  ret_1d         double
+  logret_1d      double
+  vol_20d        double
+  mom_5d         double
+  mom_20d        double
+  drawdown_60d   double
+
+  Indexes {
+    (asset_id, trading_date) [pk]
+  }
+}
+
+Table analytics.labels_daily {
+  asset_id            bigint [not null]
+  trading_date        date [not null]
+
+  ret_fwd_1d          double
+  abs_ret_fwd_1d      double
+  y_up_next_day       boolean
+  y_large_move_next   boolean
+
+  Indexes {
+    (asset_id, trading_date) [pk]
+  }
+}
+
+Table analytics.model_predictions {
+  model_run_id     bigint [not null]
+  asset_id         bigint [not null]
+  trading_date     date [not null]
+
+  p_up             double [not null]
+  p_large_move     double [not null]
+  signal           smallint          // optional: -1/0/+1
+  created_at       timestamptz
+
+  Indexes {
+    (model_run_id, asset_id, trading_date) [pk]
+  }
+}
+
+Table analytics.backtest_results {
+  model_run_id     bigint [not null]
+  trading_date     date [not null]
+
+  gross_return     double
+  net_return       double
+  cum_return       double
+  drawdown         double
+
+  hit_rate_rolling double
+  sharpe_rolling   double
+
+  Indexes {
+    (model_run_id, trading_date) [pk]
+  }
+}
+
+Table analytics.model_runs {
+  model_run_id          bigint [pk, increment]
+  model_name            text [not null]
+  feature_set_version   text [not null]
+  train_start           date [not null]
+  train_end             date [not null]
+  test_start            date
+  test_end              date
+  git_commit            text
+  created_at            timestamptz
+}
+
+// --------- RELATIONSHIPS ---------
+
+Ref: raw.assets.symbol < raw.prices_daily.symbol
+
+Ref: staging.assets.symbol < raw.assets.symbol
+Ref: staging.prices_daily.asset_id > staging.assets.asset_id
+
+Ref: staging.events.event_id < staging.event_asset_map.event_id
+Ref: staging.assets.asset_id < staging.event_asset_map.asset_id
+
+Ref: analytics.features_daily.asset_id > staging.assets.asset_id
+Ref: analytics.labels_daily.asset_id > staging.assets.asset_id
+
+Ref: analytics.model_predictions.model_run_id > analytics.model_runs.model_run_id
+Ref: analytics.model_predictions.asset_id > staging.assets.asset_id
+
+Ref: analytics.backtest_results.model_run_id > analytics.model_runs.model_run_id
