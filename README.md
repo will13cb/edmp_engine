@@ -48,7 +48,7 @@ The pipeline is orchestrated via Makefile and fully rebuildable from scratch.
 ## 1. Clone the repository
 
 ```
-git clone <repo-url>
+git clone https://github.com/will13cb/edmp_engine.git
 cd EDMP_Engine
 ```
 
