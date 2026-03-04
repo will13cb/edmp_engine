@@ -47,12 +47,18 @@ The pipeline is orchestrated via Makefile and fully rebuildable from scratch.
 
 ## 1. Clone the repository
 
-git clone `<repo-url>`{=html} cd EDMP_Engine
+```
+git clone <repo-url>
+cd EDMP_Engine
+```
 
 ## 2. Create Python virtual environment
 
-python3 -m venv .venv source .venv/bin/activate pip install -r
+```
+python3 -m venv .venv 
+source .venv/bin/activate pip install -r
 requirements.txt
+```
 
 ## 3. Create PostgreSQL database
 
@@ -60,11 +66,15 @@ createdb edmp_engine
 
 If you encounter a role error:
 
+```
 sudo -u postgres createuser --superuser \$USER
+```
 
 ## 4. Build Everything
 
+```
 make run
+```
 
 This will:
 
