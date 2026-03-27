@@ -5,6 +5,8 @@ SHELL := /bin/bash
 DB=edmp_engine
 PSQL=psql -v ON_ERROR_STOP=1 -d $(DB)
 
+PYTHON=.venv/bin/python
+
 # ------------------------
 # Prepare raw CSVs
 # ------------------------
@@ -20,7 +22,7 @@ schema:
 # ------------------------
 # Load raw CSVs
 # ------------------------
-load_raw: schema	# Ensure schema is created before loading data
+load_raw: prepare_data schema	# Ensure schema is created before loading data
 	$(PSQL) -c "TRUNCATE raw.prices_daily, raw.assets, raw.events RESTART IDENTITY;"
 	$(PSQL) -c "\copy raw.assets(symbol,name,asset_type,currency,exchange,source) FROM 'data_raw/assets.csv' CSV HEADER"
 	$(PSQL) -c "\copy raw.prices_daily(symbol,trading_date,open,high,low,close,adj_close,volume,source) FROM 'data_raw/prices_daily.csv' CSV HEADER"

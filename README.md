@@ -49,7 +49,7 @@ The pipeline is orchestrated via Makefile and fully rebuildable from scratch.
 
 ```
 git clone https://github.com/will13cb/edmp_engine.git
-cd EDMP_Engine
+cd edmp_engine
 ```
 
 ## 2. Create Python virtual environment
@@ -61,16 +61,25 @@ pip install -r requirements.txt
 ```
 
 ## 3. Create PostgreSQL database
+Install and start PostgreSQL
+macOS (Homebrew)
+```
+brew install postgresql
+brew services start postgresql
+```
+
+Ubuntu / Debian
+```
+sudo apt update
+sudo apt install postgresql postgresql-contrib
+sudo service postgresql start
+```
+
+## 4. Create the database
 
 createdb edmp_engine
 
-If you encounter a role error:
-
-```
-sudo -u postgres createuser --superuser \$USER
-```
-
-## 4. Build Everything
+## 5. Build Everything
 
 ```
 make run
@@ -96,6 +105,7 @@ EDMP_Engine/
 ├── data_raw/       # generated CSVs (ignored by git)
 ├── python/
 │   └── ingest_yahoo_daily.py
+|   └── prepare_data.py
 ├── sql/
 │   ├── 00_schema.sql
 │   ├── 10_raw_load.sql

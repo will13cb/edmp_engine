@@ -59,6 +59,10 @@ def download_prices(symbols: list[str], start: str = "2010-01-01") -> pd.DataFra
             print(f"Warning: no data returned for {symbol}")
             continue
 
+        # Fix yfinance MultiIndex columns if present
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
         df = df.reset_index()
 
         rename_map = {
