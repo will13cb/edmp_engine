@@ -5,6 +5,8 @@ SHELL := /bin/bash
 DB=edmp_engine
 PSQL=psql -v ON_ERROR_STOP=1 -d $(DB)
 
+DATA_DIR ?= $(CURDIR)/data_raw
+
 PYTHON=.venv/bin/python
 
 # ------------------------
@@ -24,14 +26,17 @@ schema:
 # ------------------------
 load_raw: prepare_data schema	# Ensure schema is created before loading data
 	$(PSQL) -c "TRUNCATE raw.prices_daily, raw.assets, raw.events RESTART IDENTITY;"
-	$(PSQL) -c "\copy raw.assets(symbol,name,asset_type,currency,exchange,source) FROM 'data_raw/assets.csv' CSV HEADER"
-	$(PSQL) -c "\copy raw.prices_daily(symbol,trading_date,open,high,low,close,adj_close,volume,source) FROM 'data_raw/prices_daily.csv' CSV HEADER"
-	$(PSQL) -c "\copy raw.events(event_type,event_ts,event_date,title,country,source,actual,forecast,previous,raw_text) FROM 'data_raw/events.csv' CSV HEADER"
+	$(PSQL) -c "\copy raw.assets(symbol,name,asset_type,currency,exchange,source) FROM '$(DATA_DIR)/assets.csv' CSV HEADER"
+	$(PSQL) -c "\copy raw.prices_daily(symbol,trading_date,open,high,low,close,adj_close,volume,source) FROM '$(DATA_DIR)/prices_daily.csv' CSV HEADER"
+	$(PSQL) -c "\copy raw.events(event_type,event_ts,event_date,title,country,source,actual,forecast,previous,raw_text) FROM '$(DATA_DIR)/events.csv' CSV HEADER"
+
+validate: load_raw
+	$(PSQL) $(PSQLFLAGS) -f sql/10_validations.sql
 
 # ------------------------
 # Staging rebuild
 # ------------------------
-staging: load_raw
+staging: validate
 	$(PSQL) -f sql/20_staging_transform.sql
 
 # ------------------------
