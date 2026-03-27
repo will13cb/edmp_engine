@@ -6,6 +6,12 @@ DB=edmp_engine
 PSQL=psql -v ON_ERROR_STOP=1 -d $(DB)
 
 # ------------------------
+# Prepare raw CSVs
+# ------------------------
+prepare_data:
+	$(PYTHON) python/prepare_data.py
+
+# ------------------------
 # Schema
 # ------------------------
 schema:
