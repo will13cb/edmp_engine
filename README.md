@@ -104,7 +104,6 @@ The system is deterministic and rebuildable.
 EDMP_Engine/
 ├── data_raw/       # generated CSVs (ignored by git)
 ├── python/
-│   └── ingest_yahoo_daily.py
 |   └── prepare_data.py
 ├── sql/
 │   ├── 00_schema.sql
