@@ -223,7 +223,6 @@ No future information is used in feature construction or model training.
 - Macroeconomic event alignment logic (timezone/after-hours → effective trading date)
 - Event → asset mapping rules (replace cross-join baseline)
 - Event-conditional features (pre/post windows, surprise magnitude, sentiment proxies)
-- Training dataset view (`analytics.v_training_dataset`) with strict null filtering
 - Baseline probabilistic model (logistic regression) + calibration (Platt / isotonic)
 - Time-series validation (walk-forward) + metrics (ROC-AUC, Brier score, calibration)
 - Store predictions in `analytics.model_predictions` with `analytics.model_runs` tracking (git commit, date ranges)

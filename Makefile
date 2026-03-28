@@ -52,6 +52,12 @@ labels: features
 	$(PSQL) -f sql/40_analytics_labels.sql
 
 # ------------------------
+# Training dataset view
+# ------------------------
+training_dataset: labels
+	$(PSQL) -f sql/50_training_dataset.sql
+
+# ------------------------
 # Full deterministic rebuild
 # ------------------------
-run: labels
+run: training_dataset
