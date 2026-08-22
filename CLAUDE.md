@@ -4,13 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-EDMP Engine (Event-Driven Market Probability Engine) is a reproducible data pipeline, not (yet) a modeling
-system. It ingests daily ETF prices from Yahoo Finance, loads them into PostgreSQL through a raw → staging →
-analytics layered warehouse, computes return/volatility/momentum features, and generates forward-looking
-labels for a future probabilistic model. There is no model training or backtesting code yet — the tables for
-it (`analytics.model_runs`, `analytics.model_predictions`, `analytics.backtest_results`) exist in the schema
-but are unused by any pipeline stage. See "Planned extensions" in README.md for the roadmap (event→asset
-mapping, baseline logistic regression model, backtesting engine).
+EDMP Engine (Event-Driven Market Probability Engine) is a reproducible data pipeline plus a baseline
+probabilistic model. It ingests daily ETF prices from Yahoo Finance, loads them into PostgreSQL through a
+raw → staging → analytics layered warehouse, computes return/volatility/momentum features, generates
+forward-looking labels, and trains a walk-forward-validated logistic regression whose predictions are written
+back into the warehouse.
+
+Status against the roadmap in README.md ("Implementation Roadmap"): Phases A–C are done (baseline model,
+walk-forward validation with embargo, honest evaluation). `analytics.model_runs` and
+`analytics.model_predictions` are populated by `python/train_baseline_logreg.py`.
+`analytics.backtest_results` is still unused — Phase D. **Events are not implemented**: `raw.events` /
+`staging.events` are wired into the schema but no real event data is ingested yet (Phase E).
+
+Two docs carry context that isn't derivable from the code: README.md "Implementation Roadmap" (what's done,
+what's next, and the measured results of each phase) and `docs/course_validation_and_backtesting.md` (the
+concepts behind Phases B–D, written against this project's actual tables).
 
 ## Commands
 
@@ -36,9 +44,21 @@ make staging                 # sql/20_staging_transform.sql: raw -> staging, tru
 make features                  # sql/30_analytics_features.sql: computes analytics.features_daily
 make labels                       # sql/40_analytics_labels.sql: computes analytics.labels_daily
 make training_dataset                # sql/50_training_dataset.sql: creates analytics.v_training_dataset view
+make train_baseline                   # python/train_baseline_logreg.py: walk-forward training + evaluation
 ```
 
-There is no test suite, linter, or CI configured in this repo.
+`make run` stops at `training_dataset` and deliberately does **not** include `train_baseline`: `make run` is
+the deterministic rebuild, whereas every training invocation appends new `model_runs`/`model_predictions`
+rows (see "Modeling layer" below). Run training as an explicit separate step.
+
+There is no test suite, linter, or CI configured in this repo. Verification is manual: run the stage, then
+inspect the warehouse with `psql`.
+
+**Working offline / avoiding re-downloads**: every stage from `load_raw` onward has `prepare_data` as a Make
+prerequisite, and Make re-runs it every time (no file-staleness check), so `make train_baseline` will try to
+hit Yahoo Finance even when `data_raw/*.csv` already exists. To re-run the SQL stages against already-
+downloaded CSVs, invoke `psql -v ON_ERROR_STOP=1 -d edmp_engine -f sql/<file>.sql` directly instead of going
+through Make.
 
 To inspect the warehouse directly:
 ```bash
@@ -54,7 +74,11 @@ raw.*        as-ingested CSV data (raw.assets, raw.prices_daily, raw.events)
   ↓  (sql/20_staging_transform.sql)
 staging.*    cleaned/typed, symbol -> asset_id resolved, computed fields (surprise, surprise_pct)
   ↓  (sql/30_analytics_features.sql, sql/40_analytics_labels.sql)
-analytics.*  features_daily, labels_daily, and the model/backtest tables (not yet populated)
+analytics.*  features_daily, labels_daily
+  ↓  (sql/50_training_dataset.sql)
+analytics.v_training_dataset   join of features + labels, NULL-filtered
+  ↓  (python/train_baseline_logreg.py)
+analytics.model_runs, analytics.model_predictions   (analytics.backtest_results still unused)
 ```
 
 **Numbered SQL files run in strict order** (`00_schema.sql` → `50_training_dataset.sql`); the number prefix
@@ -75,8 +99,32 @@ with `LAG`/trailing window frames like `ROWS BETWEEN 19 PRECEDING AND CURRENT RO
 is the only table allowed to look forward, using `LEAD(close)` to compute `ret_fwd_1d` for `trading_date`'s
 *next*-day outcome. Any new feature must use trailing-only window frames; any new label must live in the
 labels table, never mixed into features. `analytics.v_training_dataset` (sql/50_training_dataset.sql) is the
-join point that strictly filters out rows with any NULL feature/label, so it's the dataset a future model
-would actually train on.
+join point that strictly filters out rows with any NULL feature/label, so it's the dataset the model actually
+trains on.
+
+**Modeling layer** (`python/train_baseline_logreg.py`, run via `make train_baseline`). Conventions here differ
+deliberately from the SQL layer's:
+
+- **The SQL stages truncate-and-recompute; the modeling tables are append-only.** `model_runs` is an
+  experiment log (bigserial PK, `created_at`, `git_commit`) — its purpose is to let multiple runs coexist and
+  be compared. Since a fresh `model_run_id` is part of `model_predictions`'s composite PK, reruns can never
+  collide, so there is no `TRUNCATE`/`ON CONFLICT` logic and none should be added.
+- **Walk-forward validation, one `model_runs` row per fold.** Folds are expanding-window and distinguished
+  purely by their `train_start`/`train_end`/`test_start`/`test_end` ranges — the schema needs no fold column.
+- **Embargo is mandatory, not optional.** `EMBARGO_DAYS = 60` (matching the longest lookback,
+  `drawdown_60d`) drops test rows near each cutoff whose trailing feature windows would otherwise be computed
+  partly from training-period prices. Any change to the feature set's longest window must update this.
+- **Only out-of-sample (test) rows are written to `model_predictions`.** The table has no train/test marker
+  column, so writing in-sample rows would silently corrupt any downstream backtest that reads it as genuine
+  forecasts.
+- Scalers and models are refit **inside** each fold on that fold's training rows only.
+- DB access is raw `psycopg` (v3) with `psycopg.connect(dbname="edmp_engine")` — no host/user/password, no
+  ORM, no `.env`, matching the bare `psql -d edmp_engine` convention used everywhere else.
+
+**Known model status** (measured, see README Phase B/C): direction (`y_up_next_day`) has no signal — ROC-AUC
+~0.49 across folds — and the naive majority-class baseline beats the model on accuracy in every fold.
+`y_large_move_next` holds a real edge (~0.59 mean). Probabilities are poorly calibrated in the 0.55–0.60
+bucket, so `p_up` must not be used for proportional position sizing until calibration is fixed.
 
 **Event → asset mapping is a placeholder.** `staging.event_asset_map` currently does a `CROSS JOIN` of every
 event to every asset with `weight = 1.0` (see `20_staging_transform.sql` step 4) — this is explicitly called
@@ -93,4 +141,6 @@ staging.
 
 **Adding a new feature or label**: add the column to the relevant `CREATE TABLE` in `sql/00_schema.sql`,
 then extend the corresponding numbered transform script's CTE chain, keeping the trailing-only /
-forward-only discipline described above.
+forward-only discipline described above. Then add it to `sql/50_training_dataset.sql` (both the SELECT list
+and its NULL filter) and to `FEATURE_COLUMNS` in `python/train_baseline_logreg.py`. If the new feature's
+lookback window is longer than 60 days, raise `EMBARGO_DAYS` to match it.

@@ -120,7 +120,8 @@ Roadmap" below (Phase A) for details.
 EDMP_Engine/
 ├── data_raw/       # generated CSVs (ignored by git)
 ├── docs/
-│   └── architecture/   # warehouse schema diagram (ERD source + SVG)
+│   ├── architecture/   # warehouse schema diagram (ERD source + SVG)
+│   └── course_validation_and_backtesting.md   # concepts behind Phases B-D
 ├── python/
 │   ├── prepare_data.py
 │   └── train_baseline_logreg.py
@@ -239,13 +240,15 @@ No future information is used in feature construction or model training.
 
 # Planned extensions
 
-Price ingestion, warehousing, features, time-safe labels, and a baseline logistic
-regression model (Phase A) are done. See "Implementation Roadmap" below for the
-step-by-step plan and the status of each phase.
+Price ingestion, warehousing, features, time-safe labels, a baseline logistic regression
+model (Phase A), walk-forward validation with embargo (Phase B), and honest evaluation
+(Phase C) are done. See "Implementation Roadmap" below for the step-by-step plan and the
+status of each phase, and `docs/course_validation_and_backtesting.md` for the concepts
+behind Phases B–D.
 
-**Next up — validate and backtest the baseline:**
-- Walk-forward time-series validation (not a single split) + honest evaluation (calibration, naive-baseline comparison)
+**Next up — backtest the baseline:**
 - Backtesting engine with costs/slippage + risk metrics (Sharpe, max drawdown, hit rate)
+- Fix probability calibration (Platt / isotonic) before using `p_up` for position sizing
 
 **After a baseline exists — events:**
 - Macroeconomic event alignment logic (timezone/after-hours → effective trading date)
@@ -276,15 +279,33 @@ step-by-step plan and the status of each phase.
   volatility/drawdown features). Numbers from one split shouldn't be trusted yet — that's
   what Phase B is for.
 
-## Phase B — Time-series validation
-- Walk-forward / expanding-window validation instead of a single split: train on `[start, t]`, test on `[t, t+k]`, slide forward, repeat
-- Purging/embargo around the train/test boundary: drop rows whose rolling feature windows (`vol_20d`, `mom_20d`, `drawdown_60d`) overlap the other side
-- A plain random split (sklearn's default) is invalid here — adjacent rows share overlapping lookback windows
+## Phase B — Time-series validation — done
+- `python/train_baseline_logreg.py` now runs walk-forward (expanding-window) validation
+  instead of a single split: 5 folds, each training on all history up to its cutoff and
+  testing on the block after it. Each fold writes its own `analytics.model_runs` row.
+- **Purging/embargo**: the first 60 trading days after each cutoff are dropped
+  (`EMBARGO_DAYS`, matching the longest lookback `drawdown_60d`). Without this, test rows
+  near the boundary have `vol_20d`/`mom_20d`/`drawdown_60d` values computed partly from
+  training-period prices — not full label leakage, but enough that adjacent rows aren't
+  independent.
+- A plain random split (sklearn's default) is invalid here — adjacent rows share
+  overlapping lookback windows.
+- **Result** (5 folds): `y_up_next_day` ROC-AUC mean 0.4934, std 0.0279, range 0.46–0.53 —
+  straddles 0.5, confirming there is no directional signal, and that Phase A's 0.49 was not
+  a one-off. `y_large_move_next` mean 0.5928, std 0.0636, range 0.52–0.68 — the volatility
+  edge holds up across every fold, though with meaningful fold-to-fold variance.
 
-## Phase C — Evaluate honestly
-- Confusion matrix at the chosen probability threshold, not just accuracy
-- Calibration curve — does the ~0.6 probability bucket actually resolve up ~60% of the time?
-- Compare against the naive baseline (always predict the majority class / base rate)
+## Phase C — Evaluate honestly — done
+- Confusion matrix at `LONG_THRESHOLD` (0.55), calibration bucket table, and naive-baseline
+  comparison print per fold. See `docs/course_validation_and_backtesting.md` section 3.
+- **The naive baseline beats the model on accuracy in every fold** (e.g. fold 3: 0.5844
+  naive vs 0.4156 model). The model almost never clears 0.55 (single-digit true positives
+  per fold), so at that threshold it mostly abstains while ~53% of days are up anyway. This
+  is the single most important honest-evaluation finding: beating 0.5 AUC and beating the
+  naive baseline are not the same bar.
+- **Calibration is poor in the upper buckets**: the 0.55–0.60 bucket realizes ~0.33–0.45
+  rather than ~0.575, i.e. the model is overconfident exactly where it would trade. Phase D
+  must not size positions proportional to `p_up` until this is fixed.
 
 ## Phase D — Backtest
 - `python/backtest_from_predictions.py`: turn `p_up` into a position (threshold rule, or size proportional to `p_up - 0.5`)
