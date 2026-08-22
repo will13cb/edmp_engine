@@ -58,6 +58,12 @@ training_dataset: labels
 	$(PSQL) -f sql/50_training_dataset.sql
 
 # ------------------------
+# Baseline logistic regression model
+# ------------------------
+train_baseline: training_dataset
+	$(PYTHON) python/train_baseline_logreg.py
+
+# ------------------------
 # Full deterministic rebuild
 # ------------------------
 run: training_dataset
