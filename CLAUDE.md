@@ -16,9 +16,11 @@ walk-forward validation with embargo, honest evaluation). `analytics.model_runs`
 `analytics.backtest_results` is still unused — Phase D. **Events are not implemented**: `raw.events` /
 `staging.events` are wired into the schema but no real event data is ingested yet (Phase E).
 
-Two docs carry context that isn't derivable from the code: README.md "Implementation Roadmap" (what's done,
-what's next, and the measured results of each phase) and `docs/course_validation_and_backtesting.md` (the
-concepts behind Phases B–D, written against this project's actual tables).
+Three docs carry context that isn't derivable from the code: README.md "Implementation Roadmap" (what's done,
+what's next, and the measured results of each phase), `docs/design_decisions.md` (**read this first** — the
+rationale behind the architecture, validation discipline, and tests, plus known limitations and decisions
+deliberately deferred), and `docs/course_validation_and_backtesting.md` (the concepts behind Phases B–D,
+written against this project's actual tables).
 
 ## Commands
 

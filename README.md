@@ -15,6 +15,10 @@ A fully reproducible historical market reaction pipeline that:
 This project mirrors the architecture of a real-world event-driven
 trading system --- without live execution complexity.
 
+📖 **[docs/design_decisions.md](docs/design_decisions.md)** explains the reasoning behind the
+architecture, the validation discipline, the test suite, and the honest limitations — including
+why a near-0.50 ROC-AUC on next-day direction is the *expected* result rather than a failure.
+
 ------------------------------------------------------------------------
 
 # Architecture
@@ -122,6 +126,7 @@ EDMP_Engine/
 ├── data_raw/       # generated CSVs (ignored by git)
 ├── docs/
 │   ├── architecture/   # warehouse schema diagram (ERD source + SVG)
+│   ├── design_decisions.md                    # why the system is built this way
 │   └── course_validation_and_backtesting.md   # concepts behind Phases B-D
 ├── python/
 │   ├── prepare_data.py
