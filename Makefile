@@ -64,6 +64,20 @@ train_baseline: training_dataset
 	$(PYTHON) python/train_baseline_logreg.py
 
 # ------------------------
+# Tests
+# ------------------------
+# Two layers with very different costs, so pytest runs first and fails fast:
+#   1. pytest      - pure fold/embargo logic, no database, milliseconds
+#   2. assertions  - post-pipeline invariants, needs a populated warehouse
+#
+# Layer 2 reads analytics.*, so this assumes `make run` has already been done.
+# No prerequisite on `run` here: rebuilding the warehouse on every test call
+# would make the fast layer-1 loop unusable.
+test:
+	$(PYTHON) -m pytest tests/ -q
+	$(PSQL) -f sql/90_assertions.sql
+
+# ------------------------
 # Full deterministic rebuild
 # ------------------------
 run: training_dataset

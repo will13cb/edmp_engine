@@ -41,8 +41,9 @@ The pipeline is orchestrated via Makefile and fully rebuildable from scratch.
 
 -   PostgreSQL
 -   Python (yfinance, pandas, psycopg, scikit-learn)
--   SQL (window functions, rolling statistics)
+-   SQL (window functions, rolling statistics, `DO $$` assertion blocks)
 -   Make
+-   pytest
 -   Virtual environment (venv)
 
 ------------------------------------------------------------------------
@@ -127,11 +128,19 @@ EDMP_Engine/
 │   └── train_baseline_logreg.py
 ├── sql/
 │   ├── 00_schema.sql
-│   ├── 10_validations.sql
+│   ├── 10_validations.sql          # guards raw INPUT (fail-fast, pre-staging)
 │   ├── 20_staging_transform.sql
 │   ├── 30_analytics_features.sql
 │   ├── 40_analytics_labels.sql
-│   └── 50_training_dataset.sql
+│   ├── 50_training_dataset.sql
+│   └── 90_assertions.sql           # guards computed OUTPUT (run by `make test`)
+├── tests/
+│   ├── conftest.py
+│   └── test_folds.py               # fold / embargo invariants (pytest)
+├── .claude/
+│   ├── settings.json               # registers the PostToolUse hook
+│   ├── hooks/comment_reminder.sh   # prompts for why-comments on .py/.sql edits
+│   └── skills/leakage-audit/       # on-demand temporal-leakage audit procedure
 ├── Makefile
 ├── requirements.txt
 ├── README.md
@@ -235,6 +244,58 @@ y_t = outcome_{t+1}
 
 All features at time t are constructed using information available at or before t.
 No future information is used in feature construction or model training.
+
+------------------------------------------------------------------------
+
+# Enforcing that protocol
+
+The protocol above is only worth stating if something enforces it. Temporal leakage is a
+*silent* failure: nothing crashes, no row count changes, and the only symptom is a metric that
+quietly becomes optimistic. So the guarantees are mechanical rather than aspirational.
+
+```bash
+make test     # pytest (fast, no DB), then sql/90_assertions.sql (needs a built warehouse)
+```
+
+## Two validation layers, guarding opposite ends
+
+| File | Guards | Runs |
+| --- | --- | --- |
+| `sql/10_validations.sql` | raw **input** — nulls, negative prices, `high < low`, duplicate keys, future dates | inside `make run`, before staging |
+| `sql/90_assertions.sql` | computed **output** — re-derives each value from its definition | `make test`, after the pipeline |
+
+The strongest assertion is `ret_fwd_1d(t) == ret_1d(t+1)`. Both sides equal
+`close(t+1)/close(t) - 1` by definition, so any off-by-one shift in a `LEAD`/`LAG`, or a window
+frame that lost its `PARTITION BY asset_id`, makes them diverge. `sql/90_assertions.sql` also
+asserts **at the database level** that every `model_predictions` row falls inside its run's test
+window — turning "we only store out-of-sample forecasts" from a convention in Python into a
+structural guarantee that a later backtest cannot silently violate.
+
+`tests/test_folds.py` covers the walk-forward logic, where an overlapping train/test window
+would invalidate every metric while raising no error: no overlap, an embargo gap of exactly
+`EMBARGO_DAYS` trading days, disjoint test blocks, and a genuinely expanding window.
+
+**The assertions are verified to fail.** A suite that has never failed is unverified, so each
+invariant was confirmed by deliberately breaking it and watching it fire. An assertion that
+passes unconditionally is worse than none, because it licenses false confidence.
+
+## Ratchet and frontier
+
+Automated tests catch the invariants someone has already written down. They cannot catch a
+*novel* mistake — a new feature using `LEAD`, a scaler fit outside the fold loop (which leaves
+no trace in the database at all). That gap is covered by an on-demand audit procedure
+(`.claude/skills/leakage-audit/`) encoding this project's specific rules and known subtleties,
+such as why retroactively-restated adjusted prices are safe in a *ratio* but not in a *level*.
+
+The two feed each other: when the audit finds something, it becomes a new assertion, so the
+ratchet absorbs it and the audit never has to catch that class again.
+`test_embargo_covers_the_longest_feature_lookback` is exactly that — it began as a judgement
+call ("did anyone raise `EMBARGO_DAYS` after adding a longer window?") and is now a test that
+parses lookbacks out of the feature names and fails on its own.
+
+A `PostToolUse` hook (`.claude/hooks/comment_reminder.sh`) rounds this out by prompting for the
+*reasoning* behind edits to `.py`/`.sql` files — in a pipeline like this a wrong comment is
+cheap, but a wrong assumption about what a window frame may see at time `t` is expensive.
 
 ------------------------------------------------------------------------
 

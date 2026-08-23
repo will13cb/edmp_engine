@@ -2,3 +2,7 @@
 data_raw/
 __pycache__/
 .DS_Store
+
+# Claude Code: share the hook and project settings, keep personal state local.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

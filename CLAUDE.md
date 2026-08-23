@@ -51,8 +51,13 @@ make train_baseline                   # python/train_baseline_logreg.py: walk-fo
 the deterministic rebuild, whereas every training invocation appends new `model_runs`/`model_predictions`
 rows (see "Modeling layer" below). Run training as an explicit separate step.
 
-There is no test suite, linter, or CI configured in this repo. Verification is manual: run the stage, then
-inspect the warehouse with `psql`.
+Tests:
+```bash
+make test                             # pytest (fast, no DB) then sql/90_assertions.sql (needs a built warehouse)
+.venv/bin/python -m pytest tests/ -q  # layer 1 only, for a fast edit loop
+```
+
+There is no linter or CI configured in this repo.
 
 **Working offline / avoiding re-downloads**: every stage from `load_raw` onward has `prepare_data` as a Make
 prerequisite, and Make re-runs it every time (no file-staleness check), so `make train_baseline` will try to
@@ -81,7 +86,8 @@ analytics.v_training_dataset   join of features + labels, NULL-filtered
 analytics.model_runs, analytics.model_predictions   (analytics.backtest_results still unused)
 ```
 
-**Numbered SQL files run in strict order** (`00_schema.sql` → `50_training_dataset.sql`); the number prefix
+**Numbered SQL files run in strict order** (`00_schema.sql` → `50_training_dataset.sql`, with
+`90_assertions.sql` run separately by `make test`); the number prefix
 is the authoritative execution order and mirrors the Makefile dependency chain. Each transform/feature/label
 script wraps its work in `BEGIN;`/`COMMIT;` and `TRUNCATE`s its own output table(s) at the top before
 recomputing — the pipeline is designed to be re-run from scratch idempotently rather than incrementally
@@ -125,6 +131,46 @@ deliberately from the SQL layer's:
 ~0.49 across folds — and the naive majority-class baseline beats the model on accuracy in every fold.
 `y_large_move_next` holds a real edge (~0.59 mean). Probabilities are poorly calibrated in the 0.55–0.60
 bucket, so `p_up` must not be used for proportional position sizing until calibration is fixed.
+
+**Testing exists to catch silent leakage**, which is the failure mode that matters here: a temporal-leakage
+regression raises no error and changes no row count, it just quietly inflates the metrics. Two layers, run by
+`make test`:
+
+- `tests/test_folds.py` — pytest over `generate_folds`, no database. Asserts train/test never overlap, the
+  embargo gap is exactly `EMBARGO_DAYS` trading days, the window actually expands, and test blocks are
+  disjoint. `tests/conftest.py` puts `python/` on `sys.path` (the scripts are flat files, not a package).
+- `sql/90_assertions.sql` — post-pipeline invariants, needs a built warehouse. Where `sql/10_validations.sql`
+  guards raw *input*, this guards computed *output* by re-deriving each value from its definition. The
+  strongest check is `ret_fwd_1d(t) == ret_1d(t+1)`: both equal `close(t+1)/close(t) - 1`, so any off-by-one
+  shift in a `LEAD`/`LAG` or an unpartitioned window frame makes them diverge. It also asserts at the database
+  level that every `model_predictions` row falls inside its run's test window — turning the "out-of-sample
+  rows only" convention into something structurally enforced rather than merely intended.
+
+When adding an assertion, derive it from a **definition**, not from observed output — otherwise a pre-existing
+bug gets enshrined as expected behaviour. And confirm a new assertion can actually fail (break the invariant
+deliberately, watch it fire, revert); an assertion that passes unconditionally is worse than none, because it
+licenses false confidence.
+
+**Tooling in `.claude/`** (committed and shared; `settings.local.json` and `scheduled_tasks.lock` are
+gitignored as personal state):
+
+- `hooks/comment_reminder.sh` — a `PostToolUse` hook registered in `.claude/settings.json`, firing on
+  `Edit|Write` and filtering itself to `.py`/`.sql`. It asks for the *reasoning* behind a change, especially
+  the point-in-time argument. Advisory only: it always exits 0 and must never be able to fail an edit.
+- `skills/leakage-audit/` — the audit procedure described above.
+
+**After each significant pipeline change**, run `make run` → `make test`, then invoke the **`leakage-audit`
+skill** (`.claude/skills/leakage-audit/`) on the diff.
+
+The two are complements, not substitutes. `make test` is the *ratchet*: it enforces the invariants someone has
+already written down, mechanically and without fail. The audit skill is the *frontier*: it catches changes no
+assertion covers yet — a newly added feature using `LEAD`, a scaler fit outside the fold loop (which leaves no
+trace in the database at all), a feature that switches from a price ratio to a price level.
+
+When the audit finds something, **convert it into an assertion** so the ratchet absorbs it and the audit never
+has to catch that class again. `test_embargo_covers_the_longest_feature_lookback` is an example: it started as
+a judgment call ("did anyone raise `EMBARGO_DAYS` after adding a longer window?") and is now a test that fails
+by itself.
 
 **Event → asset mapping is a placeholder.** `staging.event_asset_map` currently does a `CROSS JOIN` of every
 event to every asset with `weight = 1.0` (see `20_staging_transform.sql` step 4) — this is explicitly called
