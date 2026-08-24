@@ -496,3 +496,29 @@ evaluation machinery existed would have meant debugging two hard problems at onc
   and backtesting, written against this project's actual tables.
 - **`CLAUDE.md`** — conventions and constraints for anyone (human or agent) modifying the code.
 - **`docs/architecture/`** — the warehouse schema diagram.
+
+---
+
+## 13. Chronological build log
+
+The phase roadmap in README.md describes the plan; this is the order it was actually built in,
+from `git log`, for anyone trying to see how one decision led to the next.
+
+| Date | Commit | What landed |
+| --- | --- | --- |
+| 2026-03-03 | `d9e2166` | Initial commit: `raw`/`staging`/`analytics` warehouse skeleton, price ingestion, first features + labels. |
+| 2026-03-04 | `e9e93a5`, `718f4bc` | README iteration. |
+| 2026-03-27 | `2703a94` | `prepare_data.py` added — CSV directory creation was a missing reproducibility step. |
+| 2026-03-27 | `c7a63fa` | Makefile fixed (tab indentation) and `validate` stage added — raw-input checks now run before staging. |
+| 2026-03-27 | `adab5fa`, `ecc5461` | Makefile/README follow-up. |
+| 2026-03-28 | `7fce22d` | `ingest_yahoo_daily.py` merged into `prepare_data.py` — one ingestion entry point instead of two. |
+| 2026-03-28 | `fc80320` | `analytics.v_training_dataset` added and wired into `make run` — the single join point features/labels feed the model from. |
+| 2026-08-22 | `2895d5d` | **Phase A**: baseline logistic regression, single chronological 80/20 split. First result: ROC-AUC 0.4934 (direction), 0.6031 (large moves). |
+| 2026-08-22 | `2125ab8` | **Phases B & C**: walk-forward validation (5 expanding-window folds) replaces the single split; embargo, calibration buckets, and naive-baseline comparison added. Confirmed Phase A's numbers weren't a one-off draw. |
+| 2026-08-22 | `7411533` | Leakage-safety infrastructure — `sql/90_assertions.sql`, `tests/test_folds.py`, the `leakage-audit` skill — added ahead of the (then-upcoming) universe restructure, deliberately before any risky change so a later failure is attributable to that change and not a pre-existing bug. |
+| 2026-08-23 | `fbf9bc9` | `docs/design_decisions.md` added, capturing the reasoning behind everything above. |
+| 2026-08-24 | *(uncommitted)* | Features and labels switched from `close` to `adj_close` — the fix for the "unadjusted close" limitation flagged in section 10, verified safe by the leakage-audit skill and a clean `sql/90_assertions.sql` run. Precedes the universe expansion that would otherwise have made stock splits corrupt `vol_20d`/`drawdown_60d`. |
+
+The gap between March and August is not a documented decision — just time away from the project.
+Everything from Phase A onward happened in one concentrated stretch, which is why those entries
+read as a single coherent arc while the March commits are more piecemeal setup.

@@ -4,18 +4,23 @@ TRUNCATE analytics.features_daily;
 
 -- Extract price data and compute the previous day's close
 -- using a window function (LAG)
+-- adj_close, not close: raw close carries split discontinuities (e.g. AAPL's
+-- 4:1 in 2020) that would show up as a fake +/-75% return. adj_close retroactively
+-- rescales pre-split prices, which is safe here only because every feature below
+-- is a ratio of two adj_close values on the same series -- a uniform rescaling
+-- cancels. This stops being safe the moment a feature uses a raw price level.
 WITH base AS (
   SELECT
     asset_id,
     trading_date,
-    close,
-    -- LAG(close) returns the previous row's close price
+    adj_close,
+    -- LAG(adj_close) returns the previous row's adjusted close price
     -- PARTITION BY asset_id ensures each asset is treated separately
     -- ORDER BY trading_date ensures the lag follows time order
-    LAG(close) OVER (
-      PARTITION BY asset_id 
+    LAG(adj_close) OVER (
+      PARTITION BY asset_id
       ORDER BY trading_date
-      ) AS prev_close 
+      ) AS prev_close
   FROM staging.prices_daily
 ),
 
@@ -24,20 +29,20 @@ rets AS (
   SELECT
     asset_id,
     trading_date,
-    close,
+    adj_close,
 
     -- Simple daily return:
     -- (today_close / yesterday_close) - 1
     CASE
       WHEN prev_close IS NULL OR prev_close = 0 THEN NULL
-      ELSE (close / prev_close - 1.0)
+      ELSE (adj_close / prev_close - 1.0)
     END AS ret_1d,
 
     -- Log return:
     -- ln(close / prev_close)
     CASE
-      WHEN prev_close IS NULL OR prev_close <= 0 OR close <= 0 THEN NULL
-      ELSE LN(close / prev_close)
+      WHEN prev_close IS NULL OR prev_close <= 0 OR adj_close <= 0 THEN NULL
+      ELSE LN(adj_close / prev_close)
     END AS logret_1d
   FROM base
 ),
@@ -69,10 +74,10 @@ feat AS (
     -- Momentum measures price change over a time horizon
     -- Formula: close_today / close_5_days_ago - 1
     CASE
-      WHEN LAG(close, 5) OVER (PARTITION BY asset_id ORDER BY trading_date) IS NULL
-        OR LAG(close, 5) OVER (PARTITION BY asset_id ORDER BY trading_date) = 0
+      WHEN LAG(adj_close, 5) OVER (PARTITION BY asset_id ORDER BY trading_date) IS NULL
+        OR LAG(adj_close, 5) OVER (PARTITION BY asset_id ORDER BY trading_date) = 0
       THEN NULL
-      ELSE close / LAG(close, 5) OVER (PARTITION BY asset_id ORDER BY trading_date) - 1.0
+      ELSE adj_close / LAG(adj_close, 5) OVER (PARTITION BY asset_id ORDER BY trading_date) - 1.0
     END AS mom_5d,
 
     -- --------------------------------------------------------
@@ -81,10 +86,10 @@ feat AS (
     -- Same idea as above but over a longer horizon
     -- Formula: close_today / close_20_days_ago - 1
     CASE
-      WHEN LAG(close, 20) OVER (PARTITION BY asset_id ORDER BY trading_date) IS NULL
-        OR LAG(close, 20) OVER (PARTITION BY asset_id ORDER BY trading_date) = 0
+      WHEN LAG(adj_close, 20) OVER (PARTITION BY asset_id ORDER BY trading_date) IS NULL
+        OR LAG(adj_close, 20) OVER (PARTITION BY asset_id ORDER BY trading_date) = 0
       THEN NULL
-      ELSE close / LAG(close, 20) OVER (PARTITION BY asset_id ORDER BY trading_date) - 1.0
+      ELSE adj_close / LAG(adj_close, 20) OVER (PARTITION BY asset_id ORDER BY trading_date) - 1.0
     END AS mom_20d,
 
     -- --------------------------------------------------------
@@ -96,13 +101,13 @@ feat AS (
     -- Formula:
     -- current_price / max_price_last_60_days - 1
     CASE
-      WHEN MAX(close) OVER (
+      WHEN MAX(adj_close) OVER (
         PARTITION BY asset_id
         ORDER BY trading_date
         ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
       ) = 0
       THEN NULL
-      ELSE close / MAX(close) OVER (
+      ELSE adj_close / MAX(adj_close) OVER (
         PARTITION BY asset_id
         ORDER BY trading_date
         ROWS BETWEEN 59 PRECEDING AND CURRENT ROW

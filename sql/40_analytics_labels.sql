@@ -3,17 +3,21 @@ BEGIN;
 TRUNCATE analytics.labels_daily;
 
 -- Compute the next day's close using LEAD()
+-- adj_close, matching sql/30_analytics_features.sql: raw close would inject a
+-- fake return on split days. LEAD(adj_close) is the one place in the pipeline
+-- allowed to look past t -- ret_fwd_1d(t) describes the outcome at t+1, which
+-- is exactly what a label (not a feature) is for.
 WITH px AS (
   SELECT
     asset_id,
     trading_date,
-    close,
+    adj_close,
 
-    -- LEAD(close) returns the next row's close price
+    -- LEAD(adj_close) returns the next row's adjusted close price
     -- This gives us tomorrow's price relative to today
     -- Partition ensures each asset is treated separately
-    LEAD(close) OVER (
-      PARTITION BY asset_id 
+    LEAD(adj_close) OVER (
+      PARTITION BY asset_id
       ORDER BY trading_date
       ) AS next_close
   FROM staging.prices_daily
@@ -30,8 +34,8 @@ fwd AS (
     -- (next_day_close / today_close) - 1
     -- This represents tomorrow's return
     CASE
-      WHEN next_close IS NULL OR close IS NULL OR close = 0 THEN NULL
-      ELSE (next_close / close - 1.0)
+      WHEN next_close IS NULL OR adj_close IS NULL OR adj_close = 0 THEN NULL
+      ELSE (next_close / adj_close - 1.0)
     END AS ret_fwd_1d
   FROM px
 ),
