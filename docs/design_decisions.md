@@ -270,22 +270,30 @@ ways to fool yourself.
 
 ## 8. What the results actually say
 
-Walk-forward, 5 folds, 3 ETFs (SPY, TLT, XLE), 2018 to present, 6,438 training rows:
+Walk-forward, 5 folds, 15 ETFs, 2018 to present, 32,295 training rows
+(2,153 dates × 15 instruments):
 
 | Target | Mean ROC-AUC | Std | Range |
 | --- | --- | --- | --- |
-| `y_up_next_day` | 0.4934 | 0.0279 | 0.4595 – 0.5333 |
-| `y_large_move_next` | 0.5928 | 0.0636 | 0.5177 – 0.6846 |
+| `y_up_next_day` | 0.5106 | 0.0160 | 0.4867 – 0.5310 |
+| `y_large_move_next` | 0.5744 | 0.0413 | 0.5337 – 0.6404 |
+
+The original 3-ETF run (SPY, TLT, XLE; 6,438 rows) is kept here because the comparison is
+itself a result: `y_up_next_day` was 0.4934 ± 0.0279 and `y_large_move_next` 0.5928 ± 0.0636.
+Five times the rows moved the large-move **mean** by 0.018 while tightening its **spread** by
+about a third. That is exactly what §10 predicts — correlated instruments sharing a calendar
+add far less independent information than the row count suggests, so a bigger universe buys
+precision rather than a different answer.
 
 **Direction: no signal.** The distribution straddles 0.5 across every fold. These six
 price-derived features do not predict next-day direction. This is the expected result in a
 liquid, efficient market — and it confirms Phase A's single-split figure was not an unlucky draw.
 
-**Large moves: a real but modest edge.** Every fold clears 0.5, mean 0.59. This makes mechanical
+**Large moves: a real but modest edge.** Every fold clears 0.5, mean 0.57. This makes mechanical
 sense: `vol_20d` and `drawdown_60d` are literally volatility and stress measures, so "will
 tomorrow be a large move" is a far more natural question for this feature set than "which
-direction". The 0.52–0.68 spread is wide, though, which is exactly the kind of instability a
-single split would have hidden.
+direction". The spread is still wide enough (0.53–0.64) to be the kind of instability a single
+split would have hidden, though narrower than it was on three instruments.
 
 Two findings surfaced **only** because of the honest-evaluation layer:
 
@@ -315,12 +323,37 @@ by which a silent correctness failure becomes visible.
 
 | File | Guards | Cost |
 | --- | --- | --- |
-| `sql/10_validations.sql` | raw **input**: nulls, negative prices, `high < low`, duplicate keys, future dates | runs inside `make run`, before staging |
+| `sql/10_validations.sql` | raw **input**: nulls, negative prices, `high < low`, duplicate keys, future dates, duplicate series across symbols | runs inside `make run`, before staging |
 | `sql/90_assertions.sql` | computed **output**: re-derives each value from its definition | runs in `make test`, needs a built warehouse |
 | `tests/test_folds.py` | fold construction logic | pytest, no database, milliseconds |
 
 The split by cost is deliberate: pytest runs on every edit, the SQL assertions run after a
 pipeline rebuild.
+
+### The blind spot all of them shared
+
+Every check listed above validated **within a single asset**. None compared assets to each
+other, and that gap turned out to be large enough to drive a truck through.
+
+When price fetching was made concurrent, the obvious implementation — calling `yf.download()`
+inside each task — was silently wrong. `yf.download()` stages its results in module-level state
+(`yfinance.shared._DFS`) which it *resets on entry*, so concurrent calls overwrite each other's
+accumulator and every caller can receive the same, wrong ticker's frame. The warehouse ended up
+holding one ticker's prices under all fifteen symbols.
+
+Nothing failed. Each duplicated series is internally consistent, so `ret_fwd_1d(t) == ret_1d(t+1)`
+held perfectly, per-asset row counts were right, no NULLs appeared, signs were sane — all six
+assertions passed, and the model reported a *better* large-move AUC (0.67) than the honest
+number. A plausible improvement is the most dangerous possible symptom. It was caught only by
+noticing that SHY, a 1–3 year Treasury fund, reported the same volatility as XLE to five decimal
+places.
+
+The fix is `yf.Ticker().history()`, which keeps its result on the instance rather than in module
+state. The *lesson* is the check that now sits in `sql/10_validations.sql`: fingerprint each
+symbol's series and reject duplicates, because two distinct instruments cannot have identical
+OHLCV histories. It is the first validation here that looks **across** assets, and it exists
+because the audit found something no assertion covered — the ratchet described below, working as
+intended.
 
 ### The six assertions in `sql/90_assertions.sql`
 
@@ -416,21 +449,13 @@ would be a worse trade than an occasional missing comment.
 
 Stated plainly, because a limitations section that reads like marketing is worthless.
 
-**Features are computed from unadjusted `close`.** `sql/30_analytics_features.sql` and
-`sql/40_analytics_labels.sql` use `close`, never `adj_close`. With the current ETF universe this
-is nearly harmless — only dividend adjustments differ. It becomes a **serious bug** the moment
-individual stocks are added: AAPL's 4:1 split (2020), AMZN and GOOGL's 20:1 (2022) and NVDA's
-10:1 (2024) would each inject a spurious −75% to −95% single-day return, poisoning `vol_20d` for
-20 days and `drawdown_60d` for 60, and manufacturing false labels. This is the next scheduled
-fix and it blocks the universe expansion.
-
-*A subtlety that fix must respect*: adjusted prices are **retroactively restated** — a split
-rescales all prior `adj_close` values, so today's series is not what a real-time observer saw.
-This is safe here **only because every feature is a ratio**, in which a uniform rescaling cancels.
-The argument breaks the moment any feature uses a raw price *level*.
-
-**The universe is 3 ETFs.** 6,438 rows sounds substantial but is 2,146 dates × 3 correlated
-instruments. Every result rests on very little independent information.
+**The universe is 15 ETFs, and still narrower than it looks.** 32,295 rows sounds substantial
+but is 2,153 dates × 15 instruments that mostly share one calendar and one market beta — five
+of them are US equity sector funds whose correlation with SPY runs 0.56 to 0.94. It is a
+genuine improvement on the original three (see §8: the estimates got more precise without
+moving), but the honest read is that the number of independent observations is still much
+closer to the number of trading dates than to the row count. There are no individual equities
+yet, and nothing outside US-listed ETFs.
 
 **Row count will always overstate independent information.** Assets trade on the same days and
 share market beta, so N assets on one date are nowhere near N independent observations — the
@@ -517,7 +542,8 @@ from `git log`, for anyone trying to see how one decision led to the next.
 | 2026-08-22 | `2125ab8` | **Phases B & C**: walk-forward validation (5 expanding-window folds) replaces the single split; embargo, calibration buckets, and naive-baseline comparison added. Confirmed Phase A's numbers weren't a one-off draw. |
 | 2026-08-22 | `7411533` | Leakage-safety infrastructure — `sql/90_assertions.sql`, `tests/test_folds.py`, the `leakage-audit` skill — added ahead of the (then-upcoming) universe restructure, deliberately before any risky change so a later failure is attributable to that change and not a pre-existing bug. |
 | 2026-08-23 | `fbf9bc9` | `docs/design_decisions.md` added, capturing the reasoning behind everything above. |
-| 2026-08-24 | *(uncommitted)* | Features and labels switched from `close` to `adj_close` — the fix for the "unadjusted close" limitation flagged in section 10, verified safe by the leakage-audit skill and a clean `sql/90_assertions.sql` run. Precedes the universe expansion that would otherwise have made stock splits corrupt `vol_20d`/`drawdown_60d`. |
+| 2026-08-24 | `0bed761` | Features and labels switched from `close` to `adj_close` — the fix for the "unadjusted close" limitation then flagged in §10, verified safe by the leakage-audit skill and a clean `sql/90_assertions.sql` run. Deliberately ahead of the universe expansion, which would otherwise have let stock splits corrupt `vol_20d`/`drawdown_60d`. |
+| 2026-08-26 | `bbddd5b` | Universe moved to `config/assets.csv` and expanded 3 → 15; prices fetched concurrently with `asyncio`. Uncovered a silent ingestion bug (`yf.download()`'s module-level shared state races, handing every ticker the same frame) that all six assertions passed straight through, because each validated *within* one asset and none looked *across* them. `sql/10_validations.sql` now fingerprints each symbol's series — see §9. |
 
 The gap between March and August is not a documented decision — just time away from the project.
 Everything from Phase A onward happened in one concentrated stretch, which is why those entries

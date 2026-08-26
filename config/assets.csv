@@ -1,0 +1,16 @@
+symbol,name,asset_type,currency,exchange,source
+SPY,SPDR S&P 500 ETF Trust,etf,USD,NYSE Arca,yfinance
+QQQ,Invesco QQQ Trust,etf,USD,NASDAQ,yfinance
+IWM,iShares Russell 2000 ETF,etf,USD,NYSE Arca,yfinance
+TLT,iShares 20+ Year Treasury Bond ETF,etf,USD,NASDAQ,yfinance
+IEF,iShares 7-10 Year Treasury Bond ETF,etf,USD,NASDAQ,yfinance
+SHY,iShares 1-3 Year Treasury Bond ETF,etf,USD,NASDAQ,yfinance
+HYG,iShares iBoxx $ High Yield Corporate Bond ETF,etf,USD,NYSE Arca,yfinance
+XLE,Energy Select Sector SPDR Fund,etf,USD,NYSE Arca,yfinance
+XLF,Financial Select Sector SPDR Fund,etf,USD,NYSE Arca,yfinance
+XLK,Technology Select Sector SPDR Fund,etf,USD,NYSE Arca,yfinance
+XLU,Utilities Select Sector SPDR Fund,etf,USD,NYSE Arca,yfinance
+XLI,Industrial Select Sector SPDR Fund,etf,USD,NYSE Arca,yfinance
+XLV,Health Care Select Sector SPDR Fund,etf,USD,NYSE Arca,yfinance
+GLD,SPDR Gold Shares,etf,USD,NYSE Arca,yfinance
+UUP,Invesco DB US Dollar Index Bullish Fund,etf,USD,NYSE Arca,yfinance

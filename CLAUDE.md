@@ -38,9 +38,9 @@ make run
 Individual pipeline stages (each depends on the prior stage via Make prerequisites, so `make labels` will
 also run `prepare_data`, `schema`, `load_raw`, `validate`, `staging`, and `features` first):
 ```bash
-make prepare_data       # python/prepare_data.py: downloads CSVs into data_raw/ via yfinance
+make prepare_data       # python/prepare_data.py: downloads prices into data_raw/ via yfinance (concurrently)
 make schema              # sql/00_schema.sql: creates raw/staging/analytics schemas + tables
-make load_raw             # truncates raw.* and \copy's the three CSVs in
+make load_raw             # truncates raw.* and \copy's in config/assets.csv + the two data_raw/ CSVs
 make validate              # sql/10_validations.sql: fail-fast checks on raw data
 make staging                 # sql/20_staging_transform.sql: raw -> staging, truncates staging+analytics first
 make features                  # sql/30_analytics_features.sql: computes analytics.features_daily
@@ -129,10 +129,12 @@ deliberately from the SQL layer's:
 - DB access is raw `psycopg` (v3) with `psycopg.connect(dbname="edmp_engine")` — no host/user/password, no
   ORM, no `.env`, matching the bare `psql -d edmp_engine` convention used everywhere else.
 
-**Known model status** (measured, see README Phase B/C): direction (`y_up_next_day`) has no signal — ROC-AUC
-~0.49 across folds — and the naive majority-class baseline beats the model on accuracy in every fold.
-`y_large_move_next` holds a real edge (~0.59 mean). Probabilities are poorly calibrated in the 0.55–0.60
-bucket, so `p_up` must not be used for proportional position sizing until calibration is fixed.
+**Known model status** (measured on 15 ETFs / 32,295 rows; see `docs/design_decisions.md` §8): direction
+(`y_up_next_day`) has no signal — ROC-AUC ~0.51 across folds, straddling 0.5 — and the naive
+majority-class baseline beats the model on accuracy in every fold. `y_large_move_next` holds a real edge
+(~0.57 mean). Probabilities are poorly calibrated in the 0.55–0.60 bucket, so `p_up` must not be used for
+proportional position sizing until calibration is fixed. Treat a direction AUC meaningfully above ~0.55 as
+a leakage suspect rather than a win — that heuristic has already caught one real ingestion bug.
 
 **Testing exists to catch silent leakage**, which is the failure mode that matters here: a temporal-leakage
 regression raises no error and changes no row count, it just quietly inflates the metrics. Two layers, run by
@@ -185,7 +187,11 @@ into the schema but `python/prepare_data.py` currently only writes an empty, sch
 on bad input (nulls, negative prices, `high < low`, duplicate keys, future-dated rows) before it ever reaches
 staging.
 
-**Adding a new asset**: add an entry to the `ASSETS` list in `python/prepare_data.py`, then `make run`.
+**Adding a new asset**: add a row to `config/assets.csv`, then `make run`. That file is the tracked
+source of truth for the universe — `python/prepare_data.py` reads it to decide which tickers to
+fetch, and `make load_raw` `\copy`s it straight into `raw.assets`. It is deliberately *not* in
+`data_raw/`: unlike `prices_daily.csv`/`events.csv` nothing is fetched to produce it, so there is no
+as-ingested snapshot to regenerate and no reason for it to be gitignored.
 
 **Adding a new feature or label**: add the column to the relevant `CREATE TABLE` in `sql/00_schema.sql`,
 then extend the corresponding numbered transform script's CTE chain, keeping the trailing-only /

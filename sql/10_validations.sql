@@ -67,6 +67,50 @@ BEGIN
   END IF;
 END $$;
 
+-- 2b) Distinct instruments must have distinct price series.
+--
+-- Two different tickers cannot have byte-identical OHLCV histories. If they do,
+-- the ingestion layer handed the same data to several symbols.
+--
+-- This guards a failure that every other check in this project is blind to:
+-- concurrent fetching once returned one ticker's frame for all of them, and
+-- because each series was still internally consistent, all six assertions in
+-- sql/90_assertions.sql passed (ret_fwd_1d(t) == ret_1d(t+1) holds fine within a
+-- duplicated series), row counts were right, and the model reported a plausible
+-- but meaningless AUC. Every existing check validates WITHIN one asset; this is
+-- the only one that looks ACROSS them.
+DO $$
+DECLARE
+  offenders text;
+BEGIN
+  -- Fingerprint each symbol's whole series. Cheaper than pairwise comparison and
+  -- exact: any difference in any bar changes the hash.
+  SELECT string_agg(symbols, '; ')
+    INTO offenders
+  FROM (
+    SELECT string_agg(symbol, ', ' ORDER BY symbol) AS symbols
+    FROM (
+      SELECT
+        symbol,
+        md5(string_agg(
+          coalesce(close::text, '') || '|' || coalesce(volume::text, ''),
+          ',' ORDER BY trading_date
+        )) AS series_hash
+      FROM raw.prices_daily
+      GROUP BY symbol
+    ) fingerprints
+    GROUP BY series_hash
+    HAVING COUNT(*) > 1
+  ) dupes;
+
+  IF offenders IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Validation failed: identical price series across distinct symbols (%). '
+      'The ingestion layer served one ticker''s data to several symbols - suspect '
+      'shared state in the fetch path, not a market coincidence.', offenders;
+  END IF;
+END $$;
+
 -- 3) raw.events: basic checks (tune per your dataset)
 DO $$
 BEGIN

@@ -123,6 +123,8 @@ Roadmap" below (Phase A) for details.
 
 ```
 EDMP_Engine/
+├── config/
+│   └── assets.csv  # the asset universe: tracked, hand-edited, loaded into raw.assets
 ├── data_raw/       # generated CSVs (ignored by git)
 ├── docs/
 │   ├── architecture/   # warehouse schema diagram (ERD source + SVG)
@@ -388,12 +390,6 @@ behind Phases B–D.
 
 ## Phase F — Beyond logistic regression (later)
 - If event interaction terms make the linear model insufficient, move to gradient-boosted trees (XGBoost/LightGBM) — trades away the current clean coefficient interpretability for automatic interaction/nonlinearity handling
-
-------------------------------------------------------------------------
-
-# Possible Additions
-
-- **Concurrent price ingestion**: `python/prepare_data.py` currently downloads tickers sequentially via `yf.download()`, which is I/O-bound — each call spends most of its time waiting on the network. Wrapping the fetch loop in `asyncio.TaskGroup` + `asyncio.to_thread` (yfinance isn't natively async) with a `Semaphore` capping concurrency (~20-25 at once, to stay under Yahoo's informal rate limits) would cut a ~200-ticker fetch from roughly 90-120s sequential to ~8-15s concurrent, with no changes to feature engineering or modeling. Training (`train_baseline_logreg.py`) stays untouched since it's CPU-bound — a `ProcessPoolExecutor` would be the equivalent change there, but isn't needed now.
 
 ------------------------------------------------------------------------
 
