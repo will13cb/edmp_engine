@@ -327,6 +327,11 @@ behind Phases B–D.
 - Power BI dashboards (data health, predictions, backtest performance, slices by event type)
 - Uncertainty estimates on predictions (confidence intervals via bootstrap / Bayesian logistic regression)
 - Gradient-boosted trees (XGBoost/LightGBM) if event interaction terms exceed what logistic regression can capture
+- **Live intraday data.** The pipeline is end-of-day batch: it ingests only settled sessions and
+  deliberately drops the current, still-forming bar (see `docs/design_decisions.md` §11). The
+  intended direction is to refresh the warehouse continuously — down to second-level updates —
+  which is a different system rather than a bigger version of this one, since a forming bar is a
+  value that keeps changing and every stored number would need to record *when* it was true.
 
 ------------------------------------------------------------------------
 

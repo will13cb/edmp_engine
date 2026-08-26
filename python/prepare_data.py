@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import yfinance as yf
 
@@ -12,6 +15,11 @@ ASSETS_CONFIG = ROOT / "config" / "assets.csv"
 START_DATE = "2018-01-01"
 END_DATE = None  # None means up to latest available date from Yahoo Finance.
 
+# The exchange calendar every asset in config/assets.csv trades on. Session
+# boundaries have to be judged in market time, not in whatever zone this
+# machine happens to be set to.
+MARKET_TZ = ZoneInfo("America/New_York")
+
 # Caps concurrent yfinance requests. yf.download is I/O-bound (waiting on the
 # network per ticker), so downloads run concurrently via asyncio; this bounds
 # how many are in flight at once to stay under Yahoo's informal rate limits.
@@ -21,7 +29,7 @@ MAX_CONCURRENT_DOWNLOADS = 20
 def load_asset_universe() -> pd.DataFrame:
     # config/assets.csv is the tracked source of truth for which tickers to
     # fetch (see CLAUDE.md "Adding a new asset"). `make load_raw` \copy's that
-    # same file into the raw.assets *table*, so this script only ever reads it -
+    # same file into the raw.assets table, so this script only ever reads it -
     # it writes no assets file of its own.
     return pd.read_csv(ASSETS_CONFIG)
 
@@ -115,6 +123,32 @@ async def _download_all_price_histories(
     return [t.result() for t in tasks]
 
 
+def last_settled_session(now: datetime) -> date:
+    """Latest trading_date whose session is certainly finished.
+
+    Yahoo serves the current session as a normal bar while it is still forming,
+    so a mid-afternoon fetch returns a partial open/high/low/close and a partial
+    volume. Ingesting that breaks the guarantee `make run` is built on -- two
+    rebuilds on the same afternoon would produce different warehouses -- and it
+    quietly corrupts one label per asset, because ret_fwd_1d on the
+    second-to-last row is measured against a close that has not happened yet.
+
+    The rule is to keep only sessions before today's date in market time. It
+    deliberately does not ask whether the close has passed: a "keep today after
+    16:00 ET" rule would make a 15:00 run and a 17:00 run disagree, which is the
+    exact non-determinism being fixed here. The cost is that a settled session
+    is not ingested until the following day; the benefit is that any two runs on
+    the same calendar day see identical data.
+    """
+    return now.astimezone(MARKET_TZ).date()
+
+
+def drop_unsettled_bars(prices: pd.DataFrame, now: datetime) -> pd.DataFrame:
+    """Remove bars from sessions that may still be forming. See last_settled_session."""
+    cutoff = last_settled_session(now)
+    return prices[prices["trading_date"] < cutoff].copy()
+
+
 def download_prices(symbols: list[str], start: str = START_DATE, end: str | None = END_DATE) -> pd.DataFrame:
     results = asyncio.run(_download_all_price_histories(symbols, start, end))
     frames = [df for df in results if df is not None]
@@ -123,6 +157,14 @@ def download_prices(symbols: list[str], start: str = START_DATE, end: str | None
         raise RuntimeError("No price data downloaded.")
 
     prices = pd.concat(frames, ignore_index=True)
+
+    before = len(prices)
+    prices = drop_unsettled_bars(prices, datetime.now(tz=MARKET_TZ))
+    if dropped := before - len(prices):
+        print(f"Dropped {dropped} unsettled bar(s) from the current session")
+
+    if prices.empty:
+        raise RuntimeError("No settled price data after dropping the current session.")
     prices = prices[
         [
             "symbol",

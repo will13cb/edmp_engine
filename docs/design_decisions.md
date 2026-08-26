@@ -505,6 +505,28 @@ model's evaluation already provides.
 configuration layer, and adding one would create a second place where connection behaviour is
 defined.
 
+**Not ingesting live intraday data — batch, end-of-day only, for now.** Yahoo serves the current
+session as an ordinary bar while it is still forming, so a fetch at 13:00 returns a partial close
+and roughly a third of the day's volume. `prepare_data.py` drops it: only sessions before today's
+date in market time are ingested.
+
+The rule deliberately does *not* ask whether the 16:00 close has passed. "Keep today's bar after
+the close" would make a 15:00 rebuild and a 17:00 rebuild disagree, which is precisely the
+non-determinism being removed — and determinism is the property §2 gives up incremental updating
+to protect. The price is that a settled session waits until the next day to be ingested. The
+alternative price was a warehouse whose contents depend on what time you happened to run it, plus
+one silently wrong label per asset, since `ret_fwd_1d` on the second-to-last row would have been
+measured against a close that had not happened yet.
+
+The intended direction is a warehouse that refreshes continuously, potentially every second. That
+is a genuinely different system rather than a faster version of this one. A forming bar is not a
+fact but a value that keeps changing, so every row would need to carry the time at which it was
+true, and every feature would need to be answerable as "what did this look like *as of* 13:04:22"
+rather than "what does this look like now". That is the bitemporal problem, and the current
+point-in-time discipline — one row per asset per settled session, features strictly trailing — is
+the right foundation to grow into it rather than something that would have to be undone. Until
+then, the honest description is a daily batch pipeline that never sees a partial day.
+
 **Not implementing events before the baseline was validated.** Events are the project's headline
 concept, and building them first was the tempting order. But without a working baseline there
 would be no way to measure whether event features added anything — the point of a baseline is to
