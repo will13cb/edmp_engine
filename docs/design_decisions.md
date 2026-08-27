@@ -93,7 +93,7 @@ Because `model_run_id` is freshly allocated on every insert and forms part of
 needed, and none should be added.
 
 **But a warehouse rebuild does clear them, and must.** `sql/20_staging_transform.sql` truncates
-`model_predictions`, `backtest_results` and `model_runs` along with the rest, so `make run` empties
+`model_predictions`, `backtest_results`, `backtest_runs` and `model_runs` along with the rest, so `make run` empties
 the experiment log. This is not an oversight in either direction, and it is worth being exact
 about why, because the append-only claim above is easy to over-read.
 
@@ -555,9 +555,11 @@ populated by a `CROSS JOIN` mapping every event to every asset at weight 1.0 —
 explicitly labelled as such in the file, not a mapping rule. The project is named for
 event-driven analysis and does not yet do any.
 
-**No backtest exists.** `analytics.backtest_results` is defined and unused. Until it exists, none
-of the results above have been translated into anything resembling a return series, and no
-transaction-cost or slippage assumption has been tested.
+**No backtest exists yet.** `analytics.backtest_runs` and `analytics.backtest_results` are
+defined but unwritten — the schema is in place, the engine that fills it is not. Until it exists,
+none of the results above have been translated into anything resembling a return series, and no
+transaction-cost or slippage assumption has been tested. An AUC says the ranking is informative;
+it does not say the informative part survives contact with costs.
 
 **Probabilities are not calibrated.** Documented above; blocks proportional position sizing.
 
@@ -704,6 +706,8 @@ from `git log`, for anyone trying to see how one decision led to the next.
 | 2026-08-23 | `fbf9bc9` | `docs/design_decisions.md` added, capturing the reasoning behind everything above. |
 | 2026-08-24 | `0bed761` | Features and labels switched from `close` to `adj_close` — the fix for the "unadjusted close" limitation then flagged in §10, verified safe by the leakage-audit skill and a clean `sql/90_assertions.sql` run. Deliberately ahead of the universe expansion, which would otherwise have let stock splits corrupt `vol_20d`/`drawdown_60d`. |
 | 2026-08-26 | `bbddd5b` | Universe moved to `config/assets.csv` and expanded 3 → 15; prices fetched concurrently with `asyncio`. Uncovered a silent ingestion bug (`yf.download()`'s module-level shared state races, handing every ticker the same frame) that all six assertions passed straight through, because each validated *within* one asset and none looked *across* them. `sql/10_validations.sql` now fingerprints each symbol's series — see §9. |
+
+| 2026-08-27 | *(pending)* | Phase D schema: `analytics.backtest_runs` added and `backtest_results` re-keyed onto it. Summary metrics (Sharpe, max drawdown, hit rate, expectancy) are one scalar per run and had no home in a table of daily rows; the assumptions that produce them (strategy, `cost_bps`) were not recorded at all. Mirrors the `model_runs`/`model_predictions` split for the same reason. |
 
 The gap between March and August is not a documented decision — just time away from the project.
 Everything from Phase A onward happened in one concentrated stretch, which is why those entries

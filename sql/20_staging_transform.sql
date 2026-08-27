@@ -15,6 +15,7 @@ BEGIN;
 TRUNCATE
   analytics.model_predictions,
   analytics.backtest_results,
+  analytics.backtest_runs,
   analytics.model_runs,
   analytics.labels_daily,
   analytics.features_daily,

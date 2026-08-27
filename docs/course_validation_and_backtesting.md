@@ -192,7 +192,10 @@ the strategy makes money on average.
   `analytics.model_predictions` keyed by `model_run_id` — the schema already supports this
   without changes.
 - Backtest output (`net_return`, `cum_return`, `drawdown`, and the summary metrics) goes
-  into `analytics.backtest_results`, keyed by `model_run_id`, per the roadmap's Phase D.
+  into `analytics.backtest_results`, keyed by `backtest_run_id`. The summary metrics (Sharpe, max
+  drawdown, hit rate, expectancy) are one scalar per run rather than a daily series, so they live on
+  `analytics.backtest_runs` alongside the assumptions that produced them — the strategy and the
+  cost charged.
 
 ---
 

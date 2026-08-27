@@ -13,7 +13,7 @@ back into the warehouse.
 Status against the roadmap in README.md ("Implementation Roadmap"): Phases A–C are done (baseline model,
 walk-forward validation with embargo, honest evaluation). `analytics.model_runs` and
 `analytics.model_predictions` are populated by `python/train_baseline_logreg.py`.
-`analytics.backtest_results` is still unused — Phase D. **Events are not implemented**: `raw.events` /
+`analytics.backtest_runs` / `analytics.backtest_results` are schema-ready but still unwritten — Phase D. **Events are not implemented**: `raw.events` /
 `staging.events` are wired into the schema but no real event data is ingested yet (Phase E).
 
 Three docs carry context that isn't derivable from the code: README.md "Implementation Roadmap" (what's done,
@@ -85,7 +85,7 @@ analytics.*  features_daily, labels_daily
   ↓  (sql/50_training_dataset.sql)
 analytics.v_training_dataset   join of features + labels, NULL-filtered
   ↓  (python/train_baseline_logreg.py)
-analytics.model_runs, analytics.model_predictions   (analytics.backtest_results still unused)
+analytics.model_runs, analytics.model_predictions   (analytics.backtest_runs/_results still unwritten)
 ```
 
 **Numbered SQL files run in strict order** (`00_schema.sql` → `50_training_dataset.sql`, with
@@ -119,7 +119,7 @@ deliberately from the SQL layer's:
   `model_predictions`'s composite PK, reruns can never collide, so `train_baseline_logreg.py` contains no
   `TRUNCATE`/`ON CONFLICT` logic and none should be added.
   **A rebuild does clear the log, and must**: `20_staging_transform.sql` truncates `model_predictions`,
-  `backtest_results` and `model_runs`, because `model_predictions.asset_id` references `staging.assets`,
+  `backtest_results`, `backtest_runs` and `model_runs`, because `model_predictions.asset_id` references `staging.assets`,
   which is rebuilt `RESTART IDENTITY`. Surviving rows would point at renumbered ids — misattributed to the
   wrong instrument rather than merely stale. So the log accumulates across training runs and resets on
   `make run`. Do not "fix" this by removing those tables from the `TRUNCATE`; the real fix, deferred, is

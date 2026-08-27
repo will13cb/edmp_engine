@@ -407,7 +407,8 @@ behind Phases B–D.
 - `python/backtest_from_predictions.py`: turn `p_up` into a position (threshold rule, or size proportional to `p_up - 0.5`)
 - Daily strategy return = `position * ret_fwd_1d`, minus transaction costs
 - Sharpe ratio (`mean(daily_returns) / std(daily_returns) * sqrt(252)`), max drawdown, hit rate vs. expectancy
-- Write results to `analytics.backtest_results`, keyed by `model_run_id`
+- Write summary metrics to `analytics.backtest_runs` (one row per model run x strategy x cost
+  assumption) and the daily series to `analytics.backtest_results`
 
 ## Phase E — Events (only after Phases A–D produce a baseline)
 - Ingest in order of ease: macro calendar (CPI/FOMC, quantifiable via `actual - forecast` surprise) → earnings (per-ticker mapping, after-hours handling) → speeches/text (NLP, sentiment proxy)

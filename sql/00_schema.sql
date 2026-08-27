@@ -210,22 +210,106 @@ CREATE TABLE IF NOT EXISTS analytics.model_predictions (
     CHECK (p_up >= 0 AND p_up <= 1 AND p_large_move >= 0 AND p_large_move <= 1)
 );
 
+-- backtest_results predates analytics.backtest_runs and was keyed on
+-- model_run_id with no strategy or cost columns. Every statement in this file is
+-- CREATE TABLE IF NOT EXISTS, which is idempotent but does not migrate, so an
+-- existing warehouse would silently keep the old shape and the Phase D writer
+-- would fail against it.
+--
+-- Dropping is safe here only because nothing ever wrote to this table before
+-- Phase D. That is checked rather than assumed: if rows are present, this raises
+-- instead of destroying them. A schema file that can quietly delete data is a
+-- worse trade than one that occasionally needs a manual decision.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'analytics' AND table_name = 'backtest_results'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'analytics' AND table_name = 'backtest_results'
+      AND column_name = 'backtest_run_id'
+  ) THEN
+    IF (SELECT count(*) FROM analytics.backtest_results) > 0 THEN
+      RAISE EXCEPTION
+        'analytics.backtest_results holds rows in the pre-backtest_runs shape. '
+        'Migrate or drop them deliberately; this file will not discard them.';
+    END IF;
+    DROP TABLE analytics.backtest_results;
+  END IF;
+END $$;
+
+-- One row per (model run, position rule, cost assumption). Mirrors the
+-- model_runs / model_predictions split, for the same reason: a result is not
+-- interpretable without the assumptions that produced it.
+--
+-- Two things live here that backtest_results structurally cannot hold. First,
+-- the summary metrics -- Sharpe, max drawdown, hit rate, expectancy are one
+-- scalar per run, not a daily series, and they are the numbers actually being
+-- compared. Second, the assumptions: a net_return means nothing without the cost
+-- charged to produce it, so cost_bps is recorded rather than remembered.
+--
+-- strategy exists because the point of the backtest is comparison. The same
+-- predictions must be runnable through a threshold rule and through an
+-- always-long benchmark, and an "edge" is only ever the difference between them.
+CREATE TABLE IF NOT EXISTS analytics.backtest_runs (
+  backtest_run_id  bigserial PRIMARY KEY,
+  model_run_id     bigint NOT NULL,
+  strategy         text NOT NULL,
+  cost_bps         double precision NOT NULL,
+  n_days           integer,
+  n_trades         integer,
+  total_return     double precision,
+  sharpe           double precision,
+  max_drawdown     double precision,
+  hit_rate         double precision,
+  expectancy       double precision,
+  git_commit       text,
+  created_at       timestamptz DEFAULT now(),
+  CONSTRAINT backtest_runs_model_fk
+    FOREIGN KEY (model_run_id) REFERENCES analytics.model_runs(model_run_id),
+  -- Sharpe is unbounded but a hit rate is a proportion; a violation means the
+  -- metric was computed wrong, not that the strategy was unusual.
+  CONSTRAINT backtest_runs_hit_rate_bounds
+    CHECK (hit_rate IS NULL OR (hit_rate >= 0 AND hit_rate <= 1)),
+  CONSTRAINT backtest_runs_drawdown_sign
+    CHECK (max_drawdown IS NULL OR max_drawdown <= 0),
+  CONSTRAINT backtest_runs_cost_nonneg
+    CHECK (cost_bps >= 0)
+);
+
+-- The daily series behind one backtest_runs row.
+--
+-- turnover and avg_position are stored, not just the returns, so the cost
+-- deduction is auditable rather than asserted: net_return must equal
+-- gross_return - turnover * cost_bps/10000, and sql/90_assertions.sql re-derives
+-- it. Storing only the returns would make an incorrect cost model invisible.
 CREATE TABLE IF NOT EXISTS analytics.backtest_results (
-  model_run_id      bigint NOT NULL,
+  backtest_run_id   bigint NOT NULL,
   trading_date      date NOT NULL,
+  avg_position      double precision,
+  turnover          double precision,
   gross_return      double precision,
   net_return        double precision,
   cum_return        double precision,
   drawdown          double precision,
   hit_rate_rolling  double precision,
   sharpe_rolling    double precision,
-  CONSTRAINT backtest_results_pk PRIMARY KEY (model_run_id, trading_date),
+  CONSTRAINT backtest_results_pk PRIMARY KEY (backtest_run_id, trading_date),
   CONSTRAINT backtest_results_run_fk
-    FOREIGN KEY (model_run_id) REFERENCES analytics.model_runs(model_run_id)
+    FOREIGN KEY (backtest_run_id) REFERENCES analytics.backtest_runs(backtest_run_id),
+  CONSTRAINT backtest_results_turnover_nonneg
+    CHECK (turnover IS NULL OR turnover >= 0),
+  CONSTRAINT backtest_results_drawdown_sign
+    CHECK (drawdown IS NULL OR drawdown <= 0)
 );
 
--- index for quickly retrieving backtest results by model and date
-CREATE INDEX IF NOT EXISTS ix_backtest_model_date
-  ON analytics.backtest_results(model_run_id, trading_date);
+-- index for quickly retrieving backtest results by run and date
+CREATE INDEX IF NOT EXISTS ix_backtest_run_date
+  ON analytics.backtest_results(backtest_run_id, trading_date);
+
+-- and for finding every backtest of a given model run
+CREATE INDEX IF NOT EXISTS ix_backtest_runs_model
+  ON analytics.backtest_runs(model_run_id, strategy);
 
 COMMIT;
