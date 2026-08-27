@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 from typing import NamedTuple
@@ -139,11 +140,77 @@ def predict_proba_class1(clf: LogisticRegression, X: np.ndarray) -> np.ndarray:
 
 
 def safe_auc(y_true: np.ndarray, p: np.ndarray) -> float | None:
-    # roc_auc_score raises when a fold's test window happens to be single-class.
+    """ROC-AUC, or None when it is undefined for this block.
+
+    AUC needs both classes present. Older scikit-learn raised ValueError for a
+    single-class input; 1.9 returns nan with a warning instead. Both are handled,
+    because the nan path is the dangerous one: nan is not None, so it passes an
+    `is not None` guard, lands in the list of per-fold scores, and turns the
+    reported mean and std into nan without anything failing. Returning None makes
+    the caller's existing guard do what it already reads as doing.
+
+    Not hypothetical for y_large_move_next: its base rate is around 6%, so a
+    short test block containing no large move at all is quite possible.
+    """
     try:
-        return roc_auc_score(y_true, p)
+        auc = roc_auc_score(y_true, p)
     except ValueError:
         return None
+    return None if np.isnan(auc) else float(auc)
+
+
+def per_symbol_aucs(symbols: np.ndarray, y_true: np.ndarray, p: np.ndarray) -> dict[str, float]:
+    """ROC-AUC computed separately for each symbol's test rows.
+
+    The pooled number answers "does this feature set rank days correctly", which
+    is not the same question as "for which instruments". An edge concentrated in
+    two assets and a broad one look identical pooled, and only the second is
+    worth building on.
+
+    Symbols whose test block is single-class are omitted rather than reported as
+    0.5, since AUC is undefined there and a fabricated value would drag the mean.
+    """
+    out: dict[str, float] = {}
+    for symbol in sorted(set(symbols.tolist())):
+        mask = symbols == symbol
+        auc = safe_auc(y_true[mask], p[mask])
+        if auc is not None:
+            out[symbol] = auc
+    return out
+
+
+def print_per_symbol_summary(
+    by_symbol_up: dict[str, list[float]],
+    by_symbol_large: dict[str, list[float]],
+) -> None:
+    """Per-symbol AUC across folds, beside the pooled figure.
+
+    Two things to read here. Substantively: whether an edge is broad or carried
+    by a couple of instruments, which pooling hides.
+
+    Diagnostically: whether the columns are *too* uniform. Genuinely different
+    instruments produce visibly different numbers, so near-identical rows mean
+    the assets are not actually different -- which is exactly how the ingestion
+    bug that gave every symbol one ticker's prices was found (see
+    docs/design_decisions.md §9). Every per-asset assertion passed at the time;
+    this table is where it was visible.
+    """
+    symbols = sorted(set(by_symbol_up) | set(by_symbol_large))
+    if not symbols:
+        return
+
+    def stats(values: list[float]) -> str:
+        if not values:
+            return "     n/a      "
+        arr = np.array(values)
+        return f"{arr.mean():.4f} +/-{arr.std():.4f}"
+
+    print("\nROC-AUC by symbol (mean +/- std across folds)")
+    print(f"  {'symbol':<8}{'y_up_next_day':<22}{'y_large_move_next':<22}folds")
+    for symbol in symbols:
+        up = by_symbol_up.get(symbol, [])
+        large = by_symbol_large.get(symbol, [])
+        print(f"  {symbol:<8}{stats(up):<22}{stats(large):<22}{max(len(up), len(large))}")
 
 
 def print_confusion_matrix(y_true: np.ndarray, p_up: np.ndarray) -> None:
@@ -254,6 +321,8 @@ def main() -> None:
         git_commit = get_git_commit()
         auc_up_by_fold: list[float] = []
         auc_large_by_fold: list[float] = []
+        by_symbol_up: dict[str, list[float]] = defaultdict(list)
+        by_symbol_large: dict[str, list[float]] = defaultdict(list)
 
         # All folds commit together, so a crash partway through never leaves a
         # half-recorded walk-forward run in the database.
@@ -305,6 +374,14 @@ def main() -> None:
                     auc_up_by_fold.append(auc_up)
                 if auc_large is not None:
                     auc_large_by_fold.append(auc_large)
+
+                # Accumulated per fold, reported once at the end: 15 symbols x 5
+                # folds inline would bury the pooled result it is meant to qualify.
+                test_symbols = test_df["symbol"].to_numpy()
+                for symbol, auc in per_symbol_aucs(test_symbols, y_test_up, p_up).items():
+                    by_symbol_up[symbol].append(auc)
+                for symbol, auc in per_symbol_aucs(test_symbols, y_test_large, p_large_move).items():
+                    by_symbol_large[symbol].append(auc)
 
                 print(
                     f"    ROC-AUC  y_up_next_day={'n/a' if auc_up is None else f'{auc_up:.4f}'}  "
@@ -377,6 +454,8 @@ def main() -> None:
                 f"y_large_move_next ROC-AUC over {len(arr)} folds: "
                 f"mean={arr.mean():.4f}  std={arr.std():.4f}  min={arr.min():.4f}  max={arr.max():.4f}"
             )
+
+        print_per_symbol_summary(by_symbol_up, by_symbol_large)
 
 
 if __name__ == "__main__":

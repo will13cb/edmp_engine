@@ -149,7 +149,9 @@ EDMP_Engine/
 │   └── 90_assertions.sql           # guards computed OUTPUT (run by `make test`)
 ├── tests/
 │   ├── conftest.py
-│   └── test_folds.py               # fold / embargo invariants (pytest)
+│   ├── test_folds.py               # fold / embargo invariants (pytest)
+│   ├── test_ingestion.py           # only settled sessions may enter the warehouse
+│   └── test_evaluation.py          # per-symbol scoring; undefined-AUC handling
 ├── .claude/
 │   ├── settings.json               # registers the PostToolUse hook
 │   ├── hooks/comment_reminder.sh   # prompts for why-comments on .py/.sql edits

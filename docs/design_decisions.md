@@ -322,6 +322,24 @@ precision rather than a different answer.
 price-derived features do not predict next-day direction. This is the expected result in a
 liquid, efficient market — and it confirms Phase A's single-split figure was not an unlucky draw.
 
+**Per-symbol, the large-move edge is broad rather than carried by a few instruments.** Fourteen
+of fifteen symbols clear 0.5, from GLD at 0.512 to SPY at 0.665, which is the more reassuring of
+the two possible shapes — a pooled 0.574 produced by three strong assets and twelve coin flips
+would be a much weaker result wearing the same number. Direction stays uninformative
+instrument by instrument too, ranging 0.461 to 0.571 around a pooled 0.510.
+
+Resist reading the per-symbol ranking as a finding. Fifteen symbols scored over five folds is
+fifteen chances for noise to look like structure, the per-symbol fold-to-fold spread is wide
+(often ±0.08 to ±0.18, far wider than the pooled spread), and nothing here has been corrected for
+multiple comparisons. The table is evidence about *shape* — broad versus concentrated — not a
+ranking to select instruments from. Selecting on it would be the same trap §11 refuses for
+hyperparameters, applied to assets.
+
+The table also serves a second purpose that has already paid off once. Genuinely different
+instruments produce visibly different scores, so a wall of near-identical rows means the assets
+are not actually different — the signature of the ingestion bug in §9, which every per-asset
+assertion passed cleanly. It is the model layer's standing check against that class.
+
 **Large moves: a real but modest edge.** Every fold clears 0.5, mean 0.57. This makes mechanical
 sense: `vol_20d` and `drawdown_60d` are literally volatility and stress measures, so "will
 tomorrow be a large move" is a far more natural question for this feature set than "which
@@ -359,6 +377,8 @@ by which a silent correctness failure becomes visible.
 | `sql/10_validations.sql` | raw **input**: nulls, negative prices, `high < low`, duplicate keys, future dates, assets with no prices, duplicate series across symbols | runs inside `make run`, before staging |
 | `sql/90_assertions.sql` | computed **output**: re-derives each value from its definition | runs in `make test`, needs a built warehouse |
 | `tests/test_folds.py` | fold construction logic | pytest, no database, milliseconds |
+| `tests/test_ingestion.py` | what may enter the warehouse (settled sessions only) | pytest, no database or network |
+| `tests/test_evaluation.py` | per-symbol scoring and undefined-AUC handling | pytest, no database, milliseconds |
 
 The split by cost is deliberate: pytest runs on every edit, the SQL assertions run after a
 pipeline rebuild.

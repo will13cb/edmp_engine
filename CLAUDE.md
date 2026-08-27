@@ -148,6 +148,12 @@ a leakage suspect rather than a win — that heuristic has already caught one re
 regression raises no error and changes no row count, it just quietly inflates the metrics. Two layers, run by
 `make test`:
 
+- `tests/test_ingestion.py` — pytest over the settled-session cutoff, no database or network. Asserts a
+  still-forming bar never enters the warehouse and that two runs on the same day agree.
+- `tests/test_evaluation.py` — pytest over the per-symbol AUC breakdown and `safe_auc`. The latter matters
+  more than it looks: scikit-learn 1.9 returns `nan` rather than raising for a single-class block, and `nan`
+  passes an `is not None` guard, so an undefined fold would silently turn the reported mean and std into
+  `nan`. `safe_auc` normalises both signals to `None`.
 - `tests/test_folds.py` — pytest over `generate_folds`, no database. Asserts train/test never overlap, the
   embargo gap is exactly `EMBARGO_DAYS` trading days, the window actually expands, and test blocks are
   disjoint. `tests/conftest.py` puts `python/` on `sys.path` (the scripts are flat files, not a package).
