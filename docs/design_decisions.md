@@ -48,8 +48,18 @@ mistake in the transform layer is unrecoverable.
 
 **Why `staging` between raw and analytics?** It is where the surrogate key appears. `raw.*`
 tables key on natural identifiers (`symbol`, `symbol + trading_date`) because that is what the
-CSV contains. From `staging` onward everything re-keys on `asset_id`, so a ticker rename or a
-symbol collision cannot silently corrupt joins downstream.
+CSV contains. From `staging` onward everything re-keys on `asset_id`: one table,
+`staging.assets`, defines what instruments exist, and every analytics table joins through it on a
+narrow integer rather than repeating a text symbol.
+
+It is worth being precise about what that does **not** buy, because surrogate keys usually imply
+more than they deliver here. `asset_id` is regenerated on every rebuild, so it is not a durable
+identity for an instrument — it is a within-generation join key. It offers no protection against
+a ticker rename (renaming a symbol in `config/assets.csv` simply produces a different universe on
+the next rebuild) and none against symbol collisions (`raw.assets.symbol` is already a primary
+key, and `sql/10_validations.sql` rejects duplicates before staging is reached). Anything that
+needs to refer to an instrument *across* rebuilds must use `symbol`, not `asset_id` — which is
+exactly the constraint that shapes the model-table discussion below.
 
 ### Truncate-and-recompute, not incremental update
 
@@ -67,20 +77,43 @@ warehouse.
 because downstream analytics would otherwise be orphaned — pointing at `asset_id` values that
 staging no longer defines.
 
-### The one deliberate exception: model tables are append-only
+### The one deliberate exception: model tables are append-only within a generation
 
-`analytics.model_runs` and `analytics.model_predictions` are **never** truncated. This
-contradicts the pattern above, and the contradiction is intentional:
+`analytics.model_runs` and `analytics.model_predictions` are never truncated **by the training
+script**. Nothing there overwrites or upserts: every invocation adds rows.
 
 - The SQL stages recompute **deterministic derived state**. Rebuilding must reproduce it exactly,
   so truncate-and-recompute is correct.
 - `model_runs` is an **experiment log** — `bigserial` primary key, `created_at`, `git_commit`.
-  Its entire purpose is to let runs from different code versions, feature sets, and date cutoffs
-  coexist so they can be compared. Truncating it would destroy the history it exists to record.
+  Its purpose is to let runs from different code versions, feature sets, and date cutoffs coexist
+  so they can be compared.
 
 Because `model_run_id` is freshly allocated on every insert and forms part of
 `model_predictions`'s composite primary key, reruns can never collide. No `ON CONFLICT` logic is
 needed, and none should be added.
+
+**But a warehouse rebuild does clear them, and must.** `sql/20_staging_transform.sql` truncates
+`model_predictions`, `backtest_results` and `model_runs` along with the rest, so `make run` empties
+the experiment log. This is not an oversight in either direction, and it is worth being exact
+about why, because the append-only claim above is easy to over-read.
+
+`model_predictions.asset_id` is a foreign key into `staging.assets`, and staging is rebuilt with
+`RESTART IDENTITY`, so `asset_id` values are reassigned from scratch on every run. Yesterday's
+`asset_id = 7` and today's are not the same instrument — reordering `config/assets.csv` is enough
+to shuffle them. Predictions that survived a rebuild would therefore be *silently misattributed*
+rather than merely old: rows claiming a forecast for one asset that in fact describe another. The
+choice is between losing the log and corrupting it, and losing it is plainly better.
+
+So the accurate statement is that the log is append-only **within a warehouse generation** — it
+accumulates across as many training runs as you like, and resets when the warehouse underneath it
+is rebuilt. In practice that suits how the two commands are used: `make run` is the deterministic
+rebuild, `make train_baseline` is the experiment, and runs are compared within a session rather
+than across months.
+
+If cross-rebuild history is ever needed, the cheap answer is `pg_dump` of the two tables before a
+rebuild; the correct one is re-keying `model_predictions` on `symbol` rather than `asset_id`, so
+it no longer depends on surrogate keys that are regenerated. That is deliberately not done yet —
+see §11.
 
 A consequence worth noting: `make train_baseline` is deliberately **not** part of `make run`.
 `make run` is documented as the deterministic rebuild; folding in a step that appends a new row
@@ -538,6 +571,26 @@ model's evaluation already provides.
 `psql -d edmp_engine` convention used everywhere else. A pipeline this size does not need a
 configuration layer, and adding one would create a second place where connection behaviour is
 defined.
+
+**Not re-keying the experiment log to survive rebuilds.** As §2 describes, `make run` clears
+`model_runs` and `model_predictions`, because `asset_id` is a surrogate key regenerated by every
+staging rebuild and predictions carrying stale ones would be misattributed rather than merely old.
+Re-keying `model_predictions` on `symbol` would fix that properly: symbols are stable natural
+identifiers, so the log could then outlive the warehouse it was produced against.
+
+It is not done yet because the value is currently near zero and the cost is not. Nothing compares
+runs across rebuilds today — training is run, results are read, and the next rebuild is a fresh
+start. Meanwhile the change touches the schema, the training script's inserts, assertion 6 in
+`sql/90_assertions.sql`, and whatever the Phase D backtest ends up reading, which is a lot of
+surface to disturb while the backtest itself is still unwritten. There is also a subtlety that
+would need deciding rather than defaulting: a prediction that survives a rebuild is only
+meaningful if the features behind it were computed the same way, so the log would need to record
+enough about the pipeline version to say whether an old row is still comparable. `git_commit`
+already gestures at this and would have to become load-bearing.
+
+The trigger to revisit is concrete: the first time a genuine question needs runs compared across a
+rebuild — an event-feature model in Phase E measured against a baseline trained weeks earlier, say
+— rather than any general preference for durable history.
 
 **Not enforcing documentation upkeep with a hook.** Docs in this project go stale in a specific
 way: a change lands, and the sections describing measured results, limitations, or the build log

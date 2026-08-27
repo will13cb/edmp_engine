@@ -113,10 +113,18 @@ trains on.
 **Modeling layer** (`python/train_baseline_logreg.py`, run via `make train_baseline`). Conventions here differ
 deliberately from the SQL layer's:
 
-- **The SQL stages truncate-and-recompute; the modeling tables are append-only.** `model_runs` is an
-  experiment log (bigserial PK, `created_at`, `git_commit`) — its purpose is to let multiple runs coexist and
-  be compared. Since a fresh `model_run_id` is part of `model_predictions`'s composite PK, reruns can never
-  collide, so there is no `TRUNCATE`/`ON CONFLICT` logic and none should be added.
+- **The SQL stages truncate-and-recompute; the modeling tables are append-only within a warehouse
+  generation.** `model_runs` is an experiment log (bigserial PK, `created_at`, `git_commit`) — its purpose is
+  to let multiple runs coexist and be compared. Since a fresh `model_run_id` is part of
+  `model_predictions`'s composite PK, reruns can never collide, so `train_baseline_logreg.py` contains no
+  `TRUNCATE`/`ON CONFLICT` logic and none should be added.
+  **A rebuild does clear the log, and must**: `20_staging_transform.sql` truncates `model_predictions`,
+  `backtest_results` and `model_runs`, because `model_predictions.asset_id` references `staging.assets`,
+  which is rebuilt `RESTART IDENTITY`. Surviving rows would point at renumbered ids — misattributed to the
+  wrong instrument rather than merely stale. So the log accumulates across training runs and resets on
+  `make run`. Do not "fix" this by removing those tables from the `TRUNCATE`; the real fix, deferred, is
+  re-keying on `symbol` (see `docs/design_decisions.md` §2 and §11). `pg_dump` the two tables first if a
+  particular run's output must outlive a rebuild.
 - **Walk-forward validation, one `model_runs` row per fold.** Folds are expanding-window and distinguished
   purely by their `train_start`/`train_end`/`test_start`/`test_end` ranges — the schema needs no fold column.
 - **Embargo is mandatory, not optional.** `EMBARGO_DAYS = 60` (matching the longest lookback,

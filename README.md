@@ -111,11 +111,17 @@ The system is deterministic and rebuildable.
 make train_baseline
 ```
 
-Trains a logistic regression on `analytics.v_training_dataset` (chronological train/test
-split) and writes predictions to `analytics.model_predictions`, tracked by a new row in
-`analytics.model_runs`. Not part of `make run` — each invocation appends a new model run
+Trains a logistic regression on `analytics.v_training_dataset` (walk-forward folds, never a
+random split) and writes predictions to `analytics.model_predictions`, tracked by a new row in
+`analytics.model_runs` per fold. Not part of `make run` — each invocation appends new model runs
 rather than overwriting, so it's kept as a separate, explicit step. See "Implementation
 Roadmap" below (Phase A) for details.
+
+Note that `make run` **clears** these tables: they accumulate across training runs but reset
+whenever the warehouse beneath them is rebuilt, because `model_predictions.asset_id` points into
+a `staging.assets` table that is regenerated with new ids each time. Run training after a
+rebuild, not before, and `pg_dump` the two tables first if a particular run has to outlive one
+(`docs/design_decisions.md` §2).
 
 ------------------------------------------------------------------------
 

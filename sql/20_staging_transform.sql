@@ -1,6 +1,17 @@
 BEGIN;
 
--- Clear analytics and rebuild staging to stay deterministic
+-- Clear analytics and rebuild staging to stay deterministic.
+--
+-- The model tables are included on purpose, which looks like it contradicts the
+-- append-only experiment log described in CLAUDE.md and design_decisions.md §2.
+-- It does not: nothing here overwrites a run, but staging.assets is rebuilt
+-- RESTART IDENTITY, so asset_id values are reassigned from scratch. A surviving
+-- model_predictions row would keep an asset_id that now names a different
+-- instrument -- misattributed rather than merely stale, and silently so. Losing
+-- the log is the better half of that trade.
+--
+-- Do not remove these three from the TRUNCATE to preserve history. Either
+-- pg_dump them first, or re-key model_predictions on symbol (deferred, §11).
 TRUNCATE
   analytics.model_predictions,
   analytics.backtest_results,
@@ -14,6 +25,20 @@ TRUNCATE
 RESTART IDENTITY;
 
 -- 1) Assets: raw -> staging
+--
+-- ORDER BY symbol is load-bearing, not cosmetic. asset_id is a bigserial, so it
+-- is assigned in whatever order rows arrive; without an ORDER BY that order is
+-- formally undefined. It currently matches config/assets.csv line order only
+-- because a freshly \copy'd heap happens to scan in insertion order, which is an
+-- implementation detail that would drift after any UPDATE or VACUUM FULL.
+-- Sorting makes asset_id a deterministic function of the symbol set, which is
+-- what the "same inputs produce the same warehouse" claim in
+-- design_decisions.md §2 requires.
+--
+-- Note what this does NOT provide: ids are still reassigned on every rebuild, so
+-- adding or removing a symbol shifts the ids of others. Nothing may assume an
+-- asset_id means the same instrument across rebuilds -- see the TRUNCATE comment
+-- above.
 INSERT INTO staging.assets (symbol, name, asset_type, currency, exchange, active, first_seen_at, last_seen_at)
 SELECT
   a.symbol,
@@ -24,7 +49,8 @@ SELECT
   true                          AS active,
   now()                         AS first_seen_at,
   now()                         AS last_seen_at
-FROM raw.assets a;  -- a = alias for raw.assets
+FROM raw.assets a  -- a = alias for raw.assets
+ORDER BY a.symbol;
 
 -- 2) Prices: resolve symbol -> asset_id
 INSERT INTO staging.prices_daily (
