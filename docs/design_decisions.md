@@ -263,11 +263,66 @@ Once real out-of-sample predictions exist, the question stops being "does it wor
 
 ### ROC-AUC
 
-The probability that a randomly chosen positive day scores higher than a randomly chosen negative
-day, across all thresholds at once. `0.5` is a coin flip; `1.0` is perfect separation.
+This is the headline metric everywhere in the project, so it is worth building up rather than
+asserting.
 
-It is threshold-independent, which is the point — it measures the quality of the probability
-*ranking* itself, separately from whatever cutoff is later chosen for trading.
+**The problem it solves.** The model does not output a decision, it outputs a probability. To turn
+that into "buy" or "don't", you pick a threshold — and every threshold trades two errors against
+each other. Set it low and you catch nearly every up-day but also buy on many down-days. Set it
+high and you are almost always right when you do buy, but you barely ever buy. Any single number
+computed at one threshold (accuracy, precision) describes only that choice, and says nothing about
+whether a *different* cutoff would have worked better.
+
+**The ROC curve.** Sweep the threshold across every possible value and, at each one, plot two
+quantities:
+
+- **True positive rate** — of all the days that actually rose, what fraction did we flag?
+- **False positive rate** — of all the days that did not rise, what fraction did we flag anyway?
+
+At a threshold of 1.0 nothing is flagged, so both are 0. At 0.0 everything is flagged, so both are
+1. In between, the curve traces the whole trade-off from one corner to the other. A model with no
+information gains true positives at exactly the same rate it accumulates false ones: a straight
+diagonal. A model with real information rises faster than it drifts right, bulging toward the
+top-left corner.
+
+**AUC is the area under that curve**, hence the name — 0.5 for the diagonal, 1.0 for a curve that
+reaches the corner. And it has a second definition that is easier to reason about and provably
+identical:
+
+> Pick one day at random from the days that rose, and one from the days that did not. AUC is the
+> probability the model assigned the riser a higher score.
+
+That equivalence is what makes the number interpretable. `y_large_move_next` scores ~0.57 here,
+which means: shown a real large-move day and a quiet day, the model ranks them correctly 57% of
+the time against 50% for a coin. Stated that way, "a real but modest edge" stops being a
+euphemism — seven percentage points on a pairwise comparison is exactly what a small edge looks
+like.
+
+**Why this metric and not accuracy.** Both rates above are normalised *within* their own class, so
+the ratio of positives to negatives cannot move the curve. That matters enormously for
+`y_large_move_next`, whose base rate is ~6.7%: a model that mindlessly predicts "no large move"
+every single day is 93.3% accurate and completely worthless. Accuracy rewards it; AUC gives it
+0.5, correctly. `sql/40_analytics_labels.sql` produces one balanced-ish label and one heavily
+imbalanced one, and AUC is the metric that can score both on the same scale.
+
+**Values below 0.5** mean the ranking is systematically backwards — informative in principle, since
+inverting the predictions would score above 0.5. In practice, at this project's sample sizes, they
+are noise: the per-symbol table has XLE at 0.461 on direction, which is a coin landing badly across
+five folds rather than a discovery.
+
+**What AUC deliberately cannot tell you**, which is why §7 has three checks rather than one:
+
+- *Whether the probabilities are honest.* AUC depends only on the **order** of the scores, so any
+  strictly increasing transformation leaves it untouched. Halve every probability and AUC is
+  identical. This is a feature — it isolates ranking from calibration — but it means a model can
+  post a respectable AUC while stating probabilities that are badly wrong, which is precisely this
+  project's situation in the 0.55–0.60 bucket.
+- *Whether the threshold you actually trade is any good.* AUC averages over all of them, including
+  ones nobody would use. Hence the confusion matrix at 0.55.
+- *Whether the edge is worth money.* This is the hard-won one. `y_large_move_next` ranks well at
+  0.57 and still loses to buy-and-hold once costs and the label's unsigned nature are accounted for
+  (§8). **A better ranking is not the same as a better strategy**, and no AUC could have revealed
+  that — only the backtest did.
 
 **Why a value near 0.5 is the expected outcome, not a failure.** Daily equity direction is close
 to a random walk. A realistic, honest edge from price-derived features lands around **0.52–0.56**.
@@ -275,7 +330,9 @@ Small edges are what real quantitative signals look like; they compound across m
 than winning big on any one. The suspicious direction is the *opposite* one — a simple logistic
 regression on six basic features scoring 0.65+ is far more likely to indicate leakage or a lucky
 split than genuine alpha. That expectation is written into the leakage-audit procedure as a
-trigger for investigation.
+trigger for investigation, and it has already earned its place: the ingestion corruption in §9 was
+caught precisely because large-move AUC jumped to 0.67 and that was treated as a symptom rather
+than a success.
 
 ### Confusion matrix at the trading threshold
 
@@ -345,6 +402,32 @@ sense: `vol_20d` and `drawdown_60d` are literally volatility and stress measures
 tomorrow be a large move" is a far more natural question for this feature set than "which
 direction". The spread is still wide enough (0.53–0.64) to be the kind of instability a single
 split would have hidden, though narrower than it was on three instruments.
+
+### What the backtest adds
+
+Ranking quality is not profitability, and Phase D is what separates them. Scored against
+`always_long` — holding the universe unconditionally — neither strategy is worth running:
+
+| Strategy | Sharpe | Total return | Max drawdown | Trades | vs. benchmark |
+| --- | --- | --- | --- | --- | --- |
+| `always_long` | 1.48 | 8.3% | −7.2% | 75 | — |
+| `large_move_filter` | 1.22 | 5.7% | −6.9% | 898 | −0.26 Sharpe |
+| `direction_threshold` | 0.66 | 2.1% | −2.5% | 1,221 | −0.82 Sharpe |
+
+`direction_threshold` is the arithmetic consequence of a 0.51 AUC meeting transaction costs: 1,221
+trades to underperform doing nothing. Its low drawdown is not risk management, it is being absent
+from the market most of the time.
+
+`large_move_filter` is the more informative failure, because it uses the one signal that does
+exist. Volatility *is* predictable here at ~0.57 AUC, yet stepping aside on predicted-large-move
+days bought a 0.3-point drawdown improvement for 2.6 points of return. The reason is in the label:
+`y_large_move_next` is unsigned, so it cannot distinguish a crash from a rally, and avoiding one
+forgoes the other. **Being right about volatility is not the same as having an edge** — a
+directional signal, or a signed magnitude label, is what would be required to convert it.
+
+This is the point of building the instrument before believing anything. The 0.57 AUC was real and
+survived walk-forward validation; it still does not produce a strategy. Nothing short of a backtest
+would have shown that.
 
 Two findings surfaced **only** because of the honest-evaluation layer:
 
@@ -555,11 +638,33 @@ populated by a `CROSS JOIN` mapping every event to every asset at weight 1.0 —
 explicitly labelled as such in the file, not a mapping rule. The project is named for
 event-driven analysis and does not yet do any.
 
-**No backtest exists yet.** `analytics.backtest_runs` and `analytics.backtest_results` are
-defined but unwritten — the schema is in place, the engine that fills it is not. Until it exists,
-none of the results above have been translated into anything resembling a return series, and no
-transaction-cost or slippage assumption has been tested. An AUC says the ranking is informative;
-it does not say the informative part survives contact with costs.
+**The backtest exists, but its cost model is one number.** Costs are a single `--cost-bps`
+charged on position changes, defaulting to 1.5bp. Commissions are effectively zero for retail
+now, so what that number stands for is the **bid-ask spread**: you buy at the ask and sell at the
+bid, and commission-free brokers recover it through payment for order flow rather than waiving
+it. The magnitude varies more across this universe than a single figure admits — a penny spread
+is ~0.13bp on SPY near $765 but ~3.6bp on UUP near $28 — and it widens in exactly the conditions
+`large_move_filter` trades into. It also does not scale with size and assumes fills at the close.
+
+Whether that imprecision matters is testable, so it was tested rather than argued:
+
+| Mean Sharpe | 0bp | 1.5bp | 5bp |
+| --- | --- | --- | --- |
+| `always_long` (75 trades) | 1.4833 | 1.4806 | 1.4743 |
+| `large_move_filter` (898) | 1.2510 | 1.2178 | 1.1402 |
+| `direction_threshold` (1,221) | 0.7798 | 0.6576 | 0.3727 |
+
+The conclusion is unchanged at **zero** cost: `direction_threshold` still loses to buy-and-hold by
+0.70 Sharpe when trading is free. So the cost assumption is not load-bearing for anything claimed
+here. What the table does show is that sensitivity tracks turnover — across 0 to 5bp the benchmark
+moves 0.6% and the high-turnover rule loses 52% of its Sharpe. The parameter is really a turnover
+tax, and it will decide the verdict for any future strategy that looks marginally profitable.
+
+Two larger costs are **not modelled at all**, and both would make results worse rather than
+better: taxes (1,221 trades generate short-term gains, and in some jurisdictions frequent trading
+is treated as business income — tens of percent against basis points) and borrow costs on the
+short leg of `direction_threshold`. The current backtest is therefore generous to the model, and
+it still says do not trade this.
 
 **Probabilities are not calibrated.** Documented above; blocks proportional position sizing.
 
@@ -707,6 +812,7 @@ from `git log`, for anyone trying to see how one decision led to the next.
 | 2026-08-24 | `0bed761` | Features and labels switched from `close` to `adj_close` — the fix for the "unadjusted close" limitation then flagged in §10, verified safe by the leakage-audit skill and a clean `sql/90_assertions.sql` run. Deliberately ahead of the universe expansion, which would otherwise have let stock splits corrupt `vol_20d`/`drawdown_60d`. |
 | 2026-08-26 | `bbddd5b` | Universe moved to `config/assets.csv` and expanded 3 → 15; prices fetched concurrently with `asyncio`. Uncovered a silent ingestion bug (`yf.download()`'s module-level shared state races, handing every ticker the same frame) that all six assertions passed straight through, because each validated *within* one asset and none looked *across* them. `sql/10_validations.sql` now fingerprints each symbol's series — see §9. |
 
+| 2026-08-27 | *(pending)* | **Phase D**: `python/backtest_from_predictions.py`. Neither strategy beats `always_long` (Sharpe 1.48): the direction rule returns 0.66 and the large-move filter 1.22. Writing its tests exposed a drawdown bug — the running peak started at the first day's equity rather than at the initial capital, so any decline beginning on day one reported as zero drawdown. |
 | 2026-08-27 | *(pending)* | Phase D schema: `analytics.backtest_runs` added and `backtest_results` re-keyed onto it. Summary metrics (Sharpe, max drawdown, hit rate, expectancy) are one scalar per run and had no home in a table of daily rows; the assumptions that produce them (strategy, `cost_bps`) were not recorded at all. Mirrors the `model_runs`/`model_predictions` split for the same reason. |
 
 The gap between March and August is not a documented decision — just time away from the project.

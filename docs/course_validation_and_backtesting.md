@@ -41,7 +41,8 @@ Two flavors:
 - **Rolling window** — train set is a fixed-length window that slides forward (e.g. always
   the trailing 3 years). Better if you suspect old regimes stop being relevant.
 
-Either way, you end up with N separate ROC-AUC numbers instead of one. **That distribution
+Either way, you end up with N separate ROC-AUC numbers instead of one. (For what ROC-AUC
+actually measures and what it cannot, see `design_decisions.md` §7.) **That distribution
 is the real result** — a mean of 0.55 with folds ranging 0.48–0.62 tells a very different
 story than a mean of 0.55 with folds all sitting at 0.54–0.56.
 
@@ -208,4 +209,4 @@ the strategy makes money on average.
    practice. ✅ done
 3. Write `backtest_from_predictions.py`: read `model_predictions` + `ret_fwd_1d`, apply
    costs/slippage, compute Sharpe/drawdown/expectancy, write to `backtest_results`
-   (Section 4). ⬜ not started
+   (Section 4). ✅ done

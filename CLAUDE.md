@@ -13,7 +13,8 @@ back into the warehouse.
 Status against the roadmap in README.md ("Implementation Roadmap"): Phases A–C are done (baseline model,
 walk-forward validation with embargo, honest evaluation). `analytics.model_runs` and
 `analytics.model_predictions` are populated by `python/train_baseline_logreg.py`.
-`analytics.backtest_runs` / `analytics.backtest_results` are schema-ready but still unwritten — Phase D. **Events are not implemented**: `raw.events` /
+Phase D is done: `python/backtest_from_predictions.py` writes `analytics.backtest_runs` /
+`analytics.backtest_results`. **Events are not implemented**: `raw.events` /
 `staging.events` are wired into the schema but no real event data is ingested yet (Phase E).
 
 Three docs carry context that isn't derivable from the code: README.md "Implementation Roadmap" (what's done,
@@ -47,6 +48,7 @@ make features                  # sql/30_analytics_features.sql: computes analyti
 make labels                       # sql/40_analytics_labels.sql: computes analytics.labels_daily
 make training_dataset                # sql/50_training_dataset.sql: creates analytics.v_training_dataset view
 make train_baseline                   # python/train_baseline_logreg.py: walk-forward training + evaluation
+make backtest                          # python/backtest_from_predictions.py: predictions -> returns, costs, risk metrics
 ```
 
 `make run` stops at `training_dataset` and deliberately does **not** include `train_baseline`: `make run` is
@@ -85,7 +87,9 @@ analytics.*  features_daily, labels_daily
   ↓  (sql/50_training_dataset.sql)
 analytics.v_training_dataset   join of features + labels, NULL-filtered
   ↓  (python/train_baseline_logreg.py)
-analytics.model_runs, analytics.model_predictions   (analytics.backtest_runs/_results still unwritten)
+analytics.model_runs, analytics.model_predictions
+  ↓  (python/backtest_from_predictions.py)
+analytics.backtest_runs, analytics.backtest_results
 ```
 
 **Numbered SQL files run in strict order** (`00_schema.sql` → `50_training_dataset.sql`, with

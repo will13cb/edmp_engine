@@ -138,7 +138,8 @@ EDMP_Engine/
 │   └── course_validation_and_backtesting.md   # concepts behind Phases B-D
 ├── python/
 │   ├── prepare_data.py
-│   └── train_baseline_logreg.py
+│   ├── train_baseline_logreg.py
+│   └── backtest_from_predictions.py
 ├── sql/
 │   ├── 00_schema.sql
 │   ├── 10_validations.sql          # guards raw INPUT (fail-fast, pre-staging)
@@ -151,7 +152,8 @@ EDMP_Engine/
 │   ├── conftest.py
 │   ├── test_folds.py               # fold / embargo invariants (pytest)
 │   ├── test_ingestion.py           # only settled sessions may enter the warehouse
-│   └── test_evaluation.py          # per-symbol scoring; undefined-AUC handling
+│   ├── test_evaluation.py          # per-symbol scoring; undefined-AUC handling
+│   └── test_backtest.py            # cost, compounding, drawdown and hit-rate arithmetic
 ├── .claude/
 │   ├── settings.json               # registers the PostToolUse hook
 │   ├── hooks/comment_reminder.sh   # prompts for why-comments on .py/.sql edits
@@ -369,7 +371,9 @@ behind Phases B–D.
 - Run via `make train_baseline`. Evaluated with **ROC-AUC**: the probability that the
   model ranks a randomly chosen positive-class day (e.g. an "up" day) above a randomly
   chosen negative-class day, across all thresholds at once. `0.5` = coin flip / no signal,
-  `1.0` = perfect separation. First result (single 80/20 split, not yet walk-forward
+  `1.0` = perfect separation. `docs/design_decisions.md` §7 builds the metric up properly —
+  where the curve comes from, why it is immune to class imbalance (which matters for
+  `y_large_move_next` at a ~6.7% base rate), and the three things it deliberately cannot tell you. First result (single 80/20 split, not yet walk-forward
   validated): test ROC-AUC 0.49 for `y_up_next_day` (no signal — expected for a hard,
   near-random-walk target), 0.60 for `y_large_move_next` (a real, if modest, edge from the
   volatility/drawdown features). Numbers from one split shouldn't be trusted yet — that's
@@ -403,12 +407,31 @@ behind Phases B–D.
   rather than ~0.575, i.e. the model is overconfident exactly where it would trade. Phase D
   must not size positions proportional to `p_up` until this is fixed.
 
-## Phase D — Backtest
-- `python/backtest_from_predictions.py`: turn `p_up` into a position (threshold rule, or size proportional to `p_up - 0.5`)
-- Daily strategy return = `position * ret_fwd_1d`, minus transaction costs
-- Sharpe ratio (`mean(daily_returns) / std(daily_returns) * sqrt(252)`), max drawdown, hit rate vs. expectancy
-- Write summary metrics to `analytics.backtest_runs` (one row per model run x strategy x cost
-  assumption) and the daily series to `analytics.backtest_results`
+## Phase D — Backtest — done
+- `python/backtest_from_predictions.py`, run via `make backtest`. Reads stored out-of-sample
+  predictions, joins them to the realised `ret_fwd_1d` they were a bet on, and writes summary
+  metrics to `analytics.backtest_runs` with the daily series in `analytics.backtest_results`.
+- Three position rules, each scored on identical predictions: `direction_threshold` (the stored
+  `signal`: long above 0.55, short below 0.45), `large_move_filter` (hold the market, step aside
+  when `p_large_move` is high), and `always_long` (the benchmark).
+- Costs are charged on position *changes* at `--cost-bps` (default 1.5), including the entry from
+  cash. `turnover` is stored per day so the deduction can be re-derived rather than trusted.
+- Each fold is backtested separately: test blocks are separated by embargo gaps, so a single
+  stitched equity curve would compound across periods the strategy was never invested in.
+- **Result — neither strategy beats holding the market**, which is the finding:
+
+  | Strategy | Sharpe | Total return | Max drawdown | vs. always_long |
+  | --- | --- | --- | --- | --- |
+  | `always_long` | 1.48 | 8.3% | −7.2% | — |
+  | `large_move_filter` | 1.22 | 5.7% | −6.9% | −0.26 Sharpe |
+  | `direction_threshold` | 0.66 | 2.1% | −2.5% | −0.82 Sharpe |
+
+  `direction_threshold` losing is the expected consequence of a 0.51 ROC-AUC: it trades 1,221
+  times to buy a lower return than doing nothing. `large_move_filter` is the more interesting
+  failure — it uses the one signal that does exist (~0.57 AUC), and stepping aside on
+  predicted-large-move days shaved the drawdown by only 0.3 points while giving up 2.6 points of
+  return. The label is unsigned, so avoiding a large move forgoes as much upside as downside.
+  Being *right about volatility* is not the same as having an edge.
 
 ## Phase E — Events (only after Phases A–D produce a baseline)
 - Ingest in order of ease: macro calendar (CPI/FOMC, quantifiable via `actual - forecast` surprise) → earnings (per-ticker mapping, after-hours handling) → speeches/text (NLP, sentiment proxy)

@@ -68,6 +68,17 @@ train_baseline: training_dataset
 	$(PYTHON) python/train_baseline_logreg.py
 
 # ------------------------
+# Backtest stored predictions
+# ------------------------
+# No prerequisite on train_baseline, deliberately. This reads whatever
+# predictions are already in the warehouse, so re-running it with a different
+# --cost-bps or strategy costs nothing and does not append another training run.
+# It will fail loudly if model_predictions is empty, which is the correct
+# response to "backtest before training" rather than silently training first.
+backtest:
+	$(PYTHON) python/backtest_from_predictions.py
+
+# ------------------------
 # Tests
 # ------------------------
 # Two layers with very different costs, so pytest runs first and fails fast:
