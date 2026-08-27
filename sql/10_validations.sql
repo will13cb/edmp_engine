@@ -111,6 +111,38 @@ BEGIN
   END IF;
 END $$;
 
+-- 2c) Every configured asset must actually have prices.
+--
+-- config/assets.csv declares the universe and is loaded into raw.assets
+-- unconditionally, but prices are fetched over the network per ticker. Since
+-- python/prepare_data.py catches each ticker's failure so one bad symbol cannot
+-- abort the batch, a failed download is survivable -- and therefore silent: the
+-- asset still arrives, just with no price rows behind it.
+--
+-- Nothing downstream notices. The checks above test properties OF price rows, so
+-- zero rows satisfies all of them vacuously, and assertion 5 in
+-- sql/90_assertions.sql inner-joins prices, so an asset with none is invisible to
+-- it rather than counted as wrong. The universe would quietly shrink and every
+-- metric would be computed over fewer instruments than the config claims.
+DO $$
+DECLARE
+  missing text;
+BEGIN
+  SELECT string_agg(a.symbol, ', ' ORDER BY a.symbol)
+    INTO missing
+  FROM raw.assets a
+  WHERE NOT EXISTS (
+    SELECT 1 FROM raw.prices_daily p WHERE p.symbol = a.symbol
+  );
+
+  IF missing IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Validation failed: assets with no price rows (%). The ticker is in '
+      'config/assets.csv but its download returned nothing - check the fetch '
+      'warnings from prepare_data.py, or remove it from the universe.', missing;
+  END IF;
+END $$;
+
 -- 3) raw.events: basic checks (tune per your dataset)
 DO $$
 BEGIN

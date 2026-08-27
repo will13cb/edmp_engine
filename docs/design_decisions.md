@@ -323,7 +323,7 @@ by which a silent correctness failure becomes visible.
 
 | File | Guards | Cost |
 | --- | --- | --- |
-| `sql/10_validations.sql` | raw **input**: nulls, negative prices, `high < low`, duplicate keys, future dates, duplicate series across symbols | runs inside `make run`, before staging |
+| `sql/10_validations.sql` | raw **input**: nulls, negative prices, `high < low`, duplicate keys, future dates, assets with no prices, duplicate series across symbols | runs inside `make run`, before staging |
 | `sql/90_assertions.sql` | computed **output**: re-derives each value from its definition | runs in `make test`, needs a built warehouse |
 | `tests/test_folds.py` | fold construction logic | pytest, no database, milliseconds |
 
@@ -354,6 +354,20 @@ symbol's series and reject duplicates, because two distinct instruments cannot h
 OHLCV histories. It is the first validation here that looks **across** assets, and it exists
 because the audit found something no assertion covered — the ratchet described below, working as
 intended.
+
+The same blind spot has a second shape, and it comes from a deliberate choice. Fetching is
+per-ticker fault-tolerant: `prepare_data.py` catches each download's failure so one bad symbol
+cannot abort the batch. That is the right behaviour for a network job, but it converts a loud
+failure into a quiet one — the asset still loads into `raw.assets` from `config/assets.csv`, just
+with nothing behind it. Every check that existed tested a property *of* price rows, and zero rows
+satisfies all of them vacuously; the warm-up assertion inner-joins prices, so a price-less asset
+is skipped rather than flagged. A universe of fifteen could silently become fourteen with the
+whole suite green. So `10_validations.sql` also asserts that every configured symbol has at least
+one price row.
+
+Both checks generalise to the same rule, worth stating once: **assertions that test the properties
+of rows cannot see rows that are missing, or rows that are duplicated from elsewhere.** Anything
+guarding *presence* and *distinctness* has to be written separately and deliberately.
 
 ### The six assertions in `sql/90_assertions.sql`
 
@@ -437,6 +451,26 @@ permanently. `test_embargo_covers_the_longest_feature_lookback` is the first exa
 a judgement call ("did anyone raise `EMBARGO_DAYS` after adding a longer window?") and is now a
 test that parses feature names and fails on its own.
 
+**The arrangement has now paid for itself, and it is worth being precise about which half did the
+work.** The ingestion corruption described above — every symbol carrying one ticker's prices — was
+not caught by a test. It could not have been: 18 pytest cases passed, all six SQL assertions
+passed, row counts were correct, and no NULLs appeared, because every one of those checks
+validated a property that a duplicated series satisfies perfectly. The ratchet was green and
+wrong.
+
+What caught it was the audit procedure's habit of *sanity-checking the numbers against what they
+should plausibly be* rather than only against what the code computes. The skill instructs that a
+suspiciously good result is a lead to investigate, not a win — and the run had just produced a
+large-move ROC-AUC of 0.67 against a recorded honest baseline near 0.59. Pulling on that thread
+meant comparing volatility across assets, where a 1–3 year Treasury fund and an energy fund
+reporting identical figures to five decimal places is impossible on its face.
+
+That is the frontier doing precisely the job it exists for: no assertion covered it, because
+nobody had thought to write one, and the only thing standing between a corrupt warehouse and a
+published result was a procedure that asks whether the output is *believable*. Both new checks in
+`sql/10_validations.sql` exist because of that pass, which is the ratchet absorbing the class so
+the audit never has to catch it again.
+
 A `PostToolUse` hook (`.claude/hooks/comment_reminder.sh`) completes the loop by prompting for the
 *reasoning* behind edits to `.py`/`.sql` files. In a pipeline like this a wrong comment is cheap;
 a wrong assumption about what a window frame may see at time `t` is expensive. The hook is
@@ -504,6 +538,37 @@ model's evaluation already provides.
 `psql -d edmp_engine` convention used everywhere else. A pipeline this size does not need a
 configuration layer, and adding one would create a second place where connection behaviour is
 defined.
+
+**Not enforcing documentation upkeep with a hook.** Docs in this project go stale in a specific
+way: a change lands, and the sections describing measured results, limitations, or the build log
+keep describing the system as it was. It has happened repeatedly, so mechanising it is tempting,
+and a hook is the obvious instrument — it cannot be forgotten, which is the actual failure mode.
+
+The tempting version is a `Stop` hook that compares `git diff --name-only` and complains if `.py`
+or `.sql` changed while no `.md` did. It should not be built, because it checks a **proxy** for
+the property that matters. Touching any markdown file satisfies it; adding a blank line satisfies
+it. It cannot tell a results table updated with new fold numbers from one left describing a
+three-asset warehouse that no longer exists. By this document's own standard for assertions —
+§9's rule that a check which passes unconditionally is *worse* than no check, because it
+manufactures confidence — such a hook is a bad assertion, and it would be a bad assertion
+guarding the very thing it is supposed to keep honest.
+
+The distinction worth keeping is that **a hook can prompt, but it cannot verify.** It runs before
+the work is inspected and has no way to read intent, so its honest job is to raise a question at
+the right moment. `hooks/comment_reminder.sh` is scoped exactly that way, and is careful to say
+so: it asks for the reasoning behind an edit and always exits zero.
+
+Judging whether a change is *documented* requires knowing which numbers moved, whether §8's
+results are now stale, whether a limitation in §10 has been resolved or merely reduced, and
+whether the build log needs a row — all judgement, which is what a skill encodes and a hook
+structurally cannot. That places it on the frontier side of §9's split, alongside the leakage
+audit rather than alongside the assertions.
+
+So it is `.claude/skills/doc-audit/`. It maps each kind of change to the sections that go stale
+because of it, and — the part a hook could never reach — checks the claims against the warehouse
+rather than against the diff, querying row and asset counts and comparing them to the figures the
+documents assert. It also carries a "what is not a finding" section, because an audit that cries
+wolf gets skipped, and a skipped audit is worth exactly as much as the hook it replaced.
 
 **Not ingesting live intraday data — batch, end-of-day only, for now.** Yahoo serves the current
 session as an ordinary bar while it is still forming, so a fetch at 13:00 returns a partial close

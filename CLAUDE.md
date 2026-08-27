@@ -162,9 +162,22 @@ gitignored as personal state):
   `Edit|Write` and filtering itself to `.py`/`.sql`. It asks for the *reasoning* behind a change, especially
   the point-in-time argument. Advisory only: it always exits 0 and must never be able to fail an edit.
 - `skills/leakage-audit/` — the audit procedure described above.
+- `skills/doc-audit/` — verifies a change is actually *reflected* in README.md, CLAUDE.md and
+  `docs/design_decisions.md`, rather than merely accompanied by some doc edit. It maps each kind of change
+  (new feature, new assertion, changed measured numbers, resolved limitation, completed phase, renamed
+  file) to the specific sections that go stale, and checks the claims against the warehouse instead of
+  trusting the diff.
 
 **After each significant pipeline change**, run `make run` → `make test`, then invoke the **`leakage-audit`
-skill** (`.claude/skills/leakage-audit/`) on the diff.
+skill** (`.claude/skills/leakage-audit/`) on the diff, then the **`doc-audit` skill** before committing.
+
+Docs here rot in one direction: a change lands and the sections describing measured results, limitations,
+phase status or the build log keep describing the system as it was. That is why `doc-audit` is a skill and
+deliberately **not** a hook. A hook could only check that some `.md` file was touched — a proxy satisfied by
+a blank line, unable to tell a results table carrying current fold numbers from one still describing a
+three-asset warehouse. By this project's own standard (a check that passes unconditionally is worse than
+none, because it manufactures confidence) that hook would be a bad assertion guarding the very thing meant
+to keep the project honest. A hook can *prompt*; it cannot *verify*. See `docs/design_decisions.md` §11.
 
 The two are complements, not substitutes. `make test` is the *ratchet*: it enforces the invariants someone has
 already written down, mechanically and without fail. The audit skill is the *frontier*: it catches changes no
@@ -185,7 +198,13 @@ into the schema but `python/prepare_data.py` currently only writes an empty, sch
 **Data validation happens between raw load and staging transform** (`sql/10_validations.sql`, run via
 `make validate`), using `RAISE EXCEPTION` inside `DO $$ ... $$` blocks to fail the whole `make run` fast
 on bad input (nulls, negative prices, `high < low`, duplicate keys, future-dated rows) before it ever reaches
-staging.
+staging. Two of the blocks guard things the rest of the suite structurally cannot see, because every other
+check tests a property *of* price rows: **every configured asset must have at least one price row**
+(a per-ticker fetch failure is caught in `prepare_data.py` so it can't abort the batch, which also makes it
+silent), and **no two symbols may share an identical price series** (concurrent-fetch bugs have handed every
+ticker the same frame; each duplicated series is internally consistent, so all of `90_assertions.sql` passes).
+When adding a check, ask whether it would catch a row that is *absent* or *duplicated from another asset* —
+those need their own assertions.
 
 **Adding a new asset**: add a row to `config/assets.csv`, then `make run`. That file is the tracked
 source of truth for the universe — `python/prepare_data.py` reads it to decide which tickers to

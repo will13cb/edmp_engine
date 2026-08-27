@@ -147,7 +147,8 @@ EDMP_Engine/
 ├── .claude/
 │   ├── settings.json               # registers the PostToolUse hook
 │   ├── hooks/comment_reminder.sh   # prompts for why-comments on .py/.sql edits
-│   └── skills/leakage-audit/       # on-demand temporal-leakage audit procedure
+│   ├── skills/leakage-audit/       # on-demand temporal-leakage audit procedure
+│   └── skills/doc-audit/           # checks a change is reflected in the docs, not just alongside them
 ├── Makefile
 ├── requirements.txt
 ├── README.md
@@ -268,7 +269,7 @@ make test     # pytest (fast, no DB), then sql/90_assertions.sql (needs a built 
 
 | File | Guards | Runs |
 | --- | --- | --- |
-| `sql/10_validations.sql` | raw **input** — nulls, negative prices, `high < low`, duplicate keys, future dates | inside `make run`, before staging |
+| `sql/10_validations.sql` | raw **input** — nulls, negative prices, `high < low`, duplicate keys, future dates, assets with no prices, identical series across symbols | inside `make run`, before staging |
 | `sql/90_assertions.sql` | computed **output** — re-derives each value from its definition | `make test`, after the pipeline |
 
 The strongest assertion is `ret_fwd_1d(t) == ret_1d(t+1)`. Both sides equal
@@ -300,9 +301,23 @@ ratchet absorbs it and the audit never has to catch that class again.
 call ("did anyone raise `EMBARGO_DAYS` after adding a longer window?") and is now a test that
 parses lookbacks out of the feature names and fails on its own.
 
+**This has already paid off once, and the half that did the work was the audit, not the tests.**
+The ingestion bug that left every symbol holding one ticker's prices was invisible to the
+ratchet — 18 pytest cases passed, all six SQL assertions passed, row counts were right and no
+NULLs appeared, because a duplicated series satisfies every one of those properties. The suite
+was green and the data was wrong. What caught it was the audit's rule that a suspiciously good
+result is a lead rather than a win: large-move ROC-AUC had jumped to 0.67 against a recorded
+baseline near 0.59, and pulling on that turned up a Treasury fund and an energy fund reporting
+identical volatility to five decimal places. Both new checks in `sql/10_validations.sql` exist
+because of that pass — the ratchet absorbing the class so the audit never has to find it again.
+
 A `PostToolUse` hook (`.claude/hooks/comment_reminder.sh`) rounds this out by prompting for the
 *reasoning* behind edits to `.py`/`.sql` files — in a pipeline like this a wrong comment is
-cheap, but a wrong assumption about what a window frame may see at time `t` is expensive.
+cheap, but a wrong assumption about what a window frame may see at time `t` is expensive. Note
+what the hook does and does not do: it *prompts*, it does not *verify*. A hook can see that a
+file was touched; it cannot judge whether what was written is true or complete. That distinction
+is why documentation upkeep belongs in a skill rather than a hook — see
+`docs/design_decisions.md` §11.
 
 ------------------------------------------------------------------------
 
