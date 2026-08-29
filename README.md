@@ -135,7 +135,8 @@ EDMP_Engine/
 ├── docs/
 │   ├── architecture/   # warehouse schema diagram (ERD source + SVG)
 │   ├── design_decisions.md                    # why the system is built this way
-│   └── course_validation_and_backtesting.md   # concepts behind Phases B-D
+│   ├── course_validation_and_backtesting.md   # concepts behind Phases B-D
+│   └── course_calibration_and_events.md       # calibration + Phase E (events)
 ├── python/
 │   ├── prepare_data.py
 │   ├── train_baseline_logreg.py
@@ -336,8 +337,9 @@ is why documentation upkeep belongs in a skill rather than a hook — see
 Price ingestion, warehousing, features, time-safe labels, a baseline logistic regression
 model (Phase A), walk-forward validation with embargo (Phase B), and honest evaluation
 (Phase C) are done. See "Implementation Roadmap" below for the step-by-step plan and the
-status of each phase, and `docs/course_validation_and_backtesting.md` for the concepts
-behind Phases B–D.
+status of each phase, `docs/course_validation_and_backtesting.md` for the concepts
+behind Phases B–D, and `docs/course_calibration_and_events.md` for calibration and the
+event work in Phase E.
 
 **Next up — backtest the baseline:**
 - Backtesting engine with costs/slippage + risk metrics (Sharpe, max drawdown, hit rate)

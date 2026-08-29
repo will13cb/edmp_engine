@@ -784,6 +784,8 @@ evaluation machinery existed would have meant debugging two hard problems at onc
 ## 12. Reading order for the rest of the documentation
 
 - **`README.md`** — what the system does, how to run it, the phase roadmap and its status.
+- **`docs/course_calibration_and_events.md`** — calibration and the concepts behind Phase E:
+  event alignment, surprise, the schedule-versus-outcome split, and multiple comparisons.
 - **`docs/course_validation_and_backtesting.md`** — the concepts behind walk-forward validation
   and backtesting, written against this project's actual tables.
 - **`CLAUDE.md`** — conventions and constraints for anyone (human or agent) modifying the code.

@@ -20,8 +20,11 @@ Phase D is done: `python/backtest_from_predictions.py` writes `analytics.backtes
 Three docs carry context that isn't derivable from the code: README.md "Implementation Roadmap" (what's done,
 what's next, and the measured results of each phase), `docs/design_decisions.md` (**read this first** — the
 rationale behind the architecture, validation discipline, and tests, plus known limitations and decisions
-deliberately deferred), and `docs/course_validation_and_backtesting.md` (the concepts behind Phases B–D,
-written against this project's actual tables).
+deliberately deferred), `docs/course_validation_and_backtesting.md` (the concepts behind Phases B–D,
+written against this project's actual tables), and `docs/course_calibration_and_events.md` (the same
+treatment for calibration and Phase E — probability calibration and where to fit it, effective
+trading-date alignment, surprise vs level, the two point-in-time classes of event feature, and the
+multiple-comparisons discipline).
 
 ## Commands
 
