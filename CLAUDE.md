@@ -200,13 +200,13 @@ three-asset warehouse. By this project's own standard (a check that passes uncon
 none, because it manufactures confidence) that hook would be a bad assertion guarding the very thing meant
 to keep the project honest. A hook can *prompt*; it cannot *verify*. See `docs/design_decisions.md` §11.
 
-The two are complements, not substitutes. `make test` is the *ratchet*: it enforces the invariants someone has
-already written down, mechanically and without fail. The audit skill is the *frontier*: it catches changes no
-assertion covers yet — a newly added feature using `LEAD`, a scaler fit outside the fold loop (which leaves no
-trace in the database at all), a feature that switches from a price ratio to a price level.
+The two are complements, not substitutes. `make test` enforces the invariants someone has already written
+down, mechanically and without fail. The audit skill covers what no assertion reaches yet — a newly added
+feature using `LEAD`, a scaler fit outside the fold loop (which leaves no trace in the database at all), a
+feature that switches from a price ratio to a price level.
 
-When the audit finds something, **convert it into an assertion** so the ratchet absorbs it and the audit never
-has to catch that class again. `test_embargo_covers_the_longest_feature_lookback` is an example: it started as
+When the audit finds something, **convert it into an assertion** so the test suite absorbs it and the audit
+never has to catch that class again. `test_embargo_covers_the_longest_feature_lookback` is an example: it started as
 a judgment call ("did anyone raise `EMBARGO_DAYS` after adding a longer window?") and is now a test that fails
 by itself.
 

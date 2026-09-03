@@ -79,6 +79,14 @@ backtest:
 	$(PYTHON) python/backtest_from_predictions.py
 
 # ------------------------
+# Charts
+# ------------------------
+# Reads the warehouse and writes docs/img/*.png. Not part of `make run`: it needs
+# predictions and backtests, which are explicit steps, and it only ever reads.
+charts:
+	$(PYTHON) python/make_charts.py
+
+# ------------------------
 # Tests
 # ------------------------
 # Two layers with very different costs, so pytest runs first and fails fast:

@@ -411,8 +411,8 @@ Ranking quality is not profitability, and Phase D is what separates them. Scored
 | Strategy | Sharpe | Total return | Max drawdown | Trades | vs. benchmark |
 | --- | --- | --- | --- | --- | --- |
 | `always_long` | 1.48 | 8.3% | −7.2% | 75 | — |
-| `large_move_filter` | 1.22 | 5.7% | −6.9% | 898 | −0.26 Sharpe |
 | `direction_threshold` | 0.66 | 2.1% | −2.5% | 1,221 | −0.82 Sharpe |
+| `large_move_filter` | 1.22 | 5.7% | −6.9% | 898 | −0.26 Sharpe |
 
 `direction_threshold` is the arithmetic consequence of a 0.51 AUC meeting transaction costs: 1,221
 trades to underperform doing nothing. Its low drawdown is not risk management, it is being absent
@@ -488,8 +488,8 @@ The fix is `yf.Ticker().history()`, which keeps its result on the instance rathe
 state. The *lesson* is the check that now sits in `sql/10_validations.sql`: fingerprint each
 symbol's series and reject duplicates, because two distinct instruments cannot have identical
 OHLCV histories. It is the first validation here that looks **across** assets, and it exists
-because the audit found something no assertion covered — the ratchet described below, working as
-intended.
+because the audit found something no assertion covered — the arrangement described below, working
+as intended.
 
 The same blind spot has a second shape, and it comes from a deliberate choice. Fetching is
 per-ticker fault-tolerant: `prepare_data.py` catches each download's failure so one bad symbol
@@ -568,7 +568,7 @@ migration, a failure would have been ambiguous: did the migration break it, or w
 broken? Building against known-good data first makes every future failure attributable to the
 change that produced it.
 
-### Ratchet and frontier
+### What the tests cannot catch
 
 Automated tests catch the invariants someone has **already written down**. They cannot catch a
 *novel* mistake — a newly added feature using `LEAD` trips no existing assertion, and a scaler fit
@@ -577,12 +577,10 @@ outside the fold loop leaves no trace in the database at all.
 That gap is covered by an on-demand audit procedure (`.claude/skills/leakage-audit/`) encoding
 this project's specific rules and known subtleties.
 
-The two feed each other:
+The two feed each other. `make test` is mechanical: never skipped, never forgotten, but limited to
+rules already encoded. The audit is judgement, applied to changes no assertion covers yet.
 
-- **Ratchet** (`make test`) — mechanical, never skipped, never forgotten.
-- **Frontier** (audit) — judgement, applied to changes no assertion covers yet.
-
-When the audit finds something, it becomes a new assertion, so the ratchet absorbs that class
+When the audit finds something, it becomes a new assertion, so the test suite catches that class
 permanently. `test_embargo_covers_the_longest_feature_lookback` is the first example: it began as
 a judgement call ("did anyone raise `EMBARGO_DAYS` after adding a longer window?") and is now a
 test that parses feature names and fails on its own.
@@ -591,8 +589,8 @@ test that parses feature names and fails on its own.
 work.** The ingestion corruption described above — every symbol carrying one ticker's prices — was
 not caught by a test. It could not have been: 18 pytest cases passed, all six SQL assertions
 passed, row counts were correct, and no NULLs appeared, because every one of those checks
-validated a property that a duplicated series satisfies perfectly. The ratchet was green and
-wrong.
+validated a property that a duplicated series satisfies perfectly. The suite was green and the
+data was wrong.
 
 What caught it was the audit procedure's habit of *sanity-checking the numbers against what they
 should plausibly be* rather than only against what the code computes. The skill instructs that a
@@ -601,11 +599,11 @@ large-move ROC-AUC of 0.67 against a recorded honest baseline near 0.59. Pulling
 meant comparing volatility across assets, where a 1–3 year Treasury fund and an energy fund
 reporting identical figures to five decimal places is impossible on its face.
 
-That is the frontier doing precisely the job it exists for: no assertion covered it, because
-nobody had thought to write one, and the only thing standing between a corrupt warehouse and a
-published result was a procedure that asks whether the output is *believable*. Both new checks in
-`sql/10_validations.sql` exist because of that pass, which is the ratchet absorbing the class so
-the audit never has to catch it again.
+That is the audit doing precisely the job it exists for: no assertion covered it, because nobody
+had thought to write one, and the only thing standing between a corrupt warehouse and a published
+result was a procedure that asks whether the output is *believable*. Both new checks in
+`sql/10_validations.sql` exist because of that pass — the test suite absorbing the class so the
+audit never has to catch it again.
 
 A `PostToolUse` hook (`.claude/hooks/comment_reminder.sh`) completes the loop by prompting for the
 *reasoning* behind edits to `.py`/`.sql` files. In a pipeline like this a wrong comment is cheap;
@@ -651,8 +649,8 @@ Whether that imprecision matters is testable, so it was tested rather than argue
 | Mean Sharpe | 0bp | 1.5bp | 5bp |
 | --- | --- | --- | --- |
 | `always_long` (75 trades) | 1.4833 | 1.4806 | 1.4743 |
-| `large_move_filter` (898) | 1.2510 | 1.2178 | 1.1402 |
 | `direction_threshold` (1,221) | 0.7798 | 0.6576 | 0.3727 |
+| `large_move_filter` (898) | 1.2510 | 1.2178 | 1.1402 |
 
 The conclusion is unchanged at **zero** cost: `direction_threshold` still loses to buy-and-hold by
 0.70 Sharpe when trading is free. So the cost assumption is not load-bearing for anything claimed
@@ -741,7 +739,7 @@ so: it asks for the reasoning behind an edit and always exits zero.
 Judging whether a change is *documented* requires knowing which numbers moved, whether §8's
 results are now stale, whether a limitation in §10 has been resolved or merely reduced, and
 whether the build log needs a row — all judgement, which is what a skill encodes and a hook
-structurally cannot. That places it on the frontier side of §9's split, alongside the leakage
+structurally cannot. That places it on the judgement side of §9's split, alongside the leakage
 audit rather than alongside the assertions.
 
 So it is `.claude/skills/doc-audit/`. It maps each kind of change to the sections that go stale
@@ -812,10 +810,15 @@ from `git log`, for anyone trying to see how one decision led to the next.
 | 2026-08-22 | `7411533` | Leakage-safety infrastructure — `sql/90_assertions.sql`, `tests/test_folds.py`, the `leakage-audit` skill — added ahead of the (then-upcoming) universe restructure, deliberately before any risky change so a later failure is attributable to that change and not a pre-existing bug. |
 | 2026-08-23 | `fbf9bc9` | `docs/design_decisions.md` added, capturing the reasoning behind everything above. |
 | 2026-08-24 | `0bed761` | Features and labels switched from `close` to `adj_close` — the fix for the "unadjusted close" limitation then flagged in §10, verified safe by the leakage-audit skill and a clean `sql/90_assertions.sql` run. Deliberately ahead of the universe expansion, which would otherwise have let stock splits corrupt `vol_20d`/`drawdown_60d`. |
-| 2026-08-26 | `bbddd5b` | Universe moved to `config/assets.csv` and expanded 3 → 15; prices fetched concurrently with `asyncio`. Uncovered a silent ingestion bug (`yf.download()`'s module-level shared state races, handing every ticker the same frame) that all six assertions passed straight through, because each validated *within* one asset and none looked *across* them. `sql/10_validations.sql` now fingerprints each symbol's series — see §9. |
+| 2026-08-26 | `11ef555` | Universe moved to `config/assets.csv` and expanded 3 → 15; prices fetched concurrently with `asyncio`. Uncovered a silent ingestion bug (`yf.download()`'s module-level shared state races, handing every ticker the same frame) that all six assertions passed straight through, because each validated *within* one asset and none looked *across* them. `sql/10_validations.sql` now fingerprints each symbol's series — see §9. |
 
-| 2026-08-27 | *(pending)* | **Phase D**: `python/backtest_from_predictions.py`. Neither strategy beats `always_long` (Sharpe 1.48): the direction rule returns 0.66 and the large-move filter 1.22. Writing its tests exposed a drawdown bug — the running peak started at the first day's equity rather than at the initial capital, so any decline beginning on day one reported as zero drawdown. |
-| 2026-08-27 | *(pending)* | Phase D schema: `analytics.backtest_runs` added and `backtest_results` re-keyed onto it. Summary metrics (Sharpe, max drawdown, hit rate, expectancy) are one scalar per run and had no home in a table of daily rows; the assumptions that produce them (strategy, `cost_bps`) were not recorded at all. Mirrors the `model_runs`/`model_predictions` split for the same reason. |
+| 2026-08-26 | `4097a2c` | Ingestion restricted to settled sessions. Yahoo serves the session in progress as an ordinary bar, so a mid-afternoon fetch was ingesting a partial close and partial volume — two rebuilds an hour apart disagreed, and `ret_fwd_1d` on the second-to-last row was measured against a close that had not happened yet. |
+| 2026-08-26 | `2f2f823` | Guards for the failures the suite structurally could not see: every configured asset must have price rows (a caught per-ticker fetch failure is survivable and therefore silent), plus the `doc-audit` skill. Records that the audit and not the tests caught the ingestion corruption. |
+| 2026-08-26 | `79fee09` | §2 corrected: a rebuild *does* clear the experiment log, and must, since `asset_id` is regenerated and surviving predictions would be misattributed rather than merely stale. `staging.assets` gained an `ORDER BY` so its ids are deterministic by construction rather than by heap order. |
+| 2026-08-27 | `257397d` | Per-symbol ROC-AUC reporting, which doubles as a standing check that the assets are actually different. Writing its tests exposed `safe_auc` returning `nan` rather than `None` for a single-class block — `nan` passes an `is not None` guard and silently turns the reported mean into `nan`. |
+| 2026-08-27 | `2afee1e` | Phase D schema: `analytics.backtest_runs` added and `backtest_results` re-keyed onto it. Summary metrics (Sharpe, max drawdown, hit rate, expectancy) are one scalar per run and had no home in a table of daily rows; the assumptions that produce them (strategy, `cost_bps`) were not recorded at all. Mirrors the `model_runs`/`model_predictions` split for the same reason. |
+| 2026-08-27 | `cc7bbf8` | **Phase D**: `python/backtest_from_predictions.py`. Neither strategy beats `always_long` (Sharpe 1.48): the direction rule returns 0.66 and the large-move filter 1.22. Writing its tests exposed a drawdown bug — the running peak started at the first day's equity rather than at the initial capital, so any decline beginning on day one reported as zero drawdown. |
+| 2026-08-29 | `cfed30f` | `docs/course_calibration_and_events.md`: the concepts between a working backtest and a working event pipeline — calibration and where it must be fitted, effective trading-date alignment, surprise versus level, the schedule/outcome split for event features, and multiple comparisons. |
 
 The gap between March and August is not a documented decision — just time away from the project.
 Everything from Phase A onward happened in one concentrated stretch, which is why those entries

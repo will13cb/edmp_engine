@@ -14,8 +14,8 @@ Phase D produced a clean negative result: no strategy beats holding the market.
 | Strategy | Sharpe | Total | Max DD | vs. benchmark |
 | --- | --- | --- | --- | --- |
 | `always_long` | 1.48 | 8.3% | −7.2% | — |
-| `large_move_filter` | 1.22 | 5.7% | −6.9% | −0.26 |
 | `direction_threshold` | 0.66 | 2.1% | −2.5% | −0.82 |
+| `large_move_filter` | 1.22 | 5.7% | −6.9% | −0.26 |
 
 Two lessons matter for everything below.
 
