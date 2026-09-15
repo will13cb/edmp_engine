@@ -2,6 +2,12 @@
 // Event-Driven Market Probability Engine ERD (Entity-Relationship Diagram)
 // DBML (database markup language)
 // Schemas: raw, staging, analytics
+//
+// Mirrors sql/00_schema.sql, which is the source of truth. This file is
+// maintained by hand, so when you add or re-key a table there, update it here
+// in the same commit -- it has silently described a pre-Phase-D warehouse once
+// already. Ref: lines are foreign keys that actually exist in the schema;
+// raw -> staging is a transformation, not a constraint, and is noted as such.
 // ===========================
 
 Table raw.assets {
@@ -21,7 +27,7 @@ Table staging.assets {
   asset_type    text
   currency      text
   exchange      text
-  active        boolean
+  active        boolean [not null]
   first_seen_at timestamptz
   last_seen_at  timestamptz
 }
@@ -41,6 +47,7 @@ Table raw.prices_daily {
   Indexes {
     (symbol, trading_date) [unique] // raw de-dupe key
   }
+  // ix_raw_prices_symbol_date duplicates the unique key above; it is redundant.
 }
 
 Table staging.prices_daily {
@@ -58,9 +65,11 @@ Table staging.prices_daily {
   Indexes {
     (asset_id, trading_date) [pk]   // warehouse key
   }
+  // CHECK prices_daily_stg_nonneg_volume: volume IS NULL OR volume >= 0
 }
 
 Table raw.events {
+  event_id      bigint [pk, increment]
   event_type    text [not null]     // CPI, FOMC, Earnings, Geo, Speech...
   event_ts      timestamptz [not null]
   event_date    date                // effective trading date (after alignment)
@@ -76,7 +85,7 @@ Table raw.events {
   ingested_at   timestamptz
 
   Indexes {
-    (event_ts) 
+    (event_ts)
   }
 }
 
@@ -103,7 +112,9 @@ Table staging.events {
   }
 }
 
-// Map which assets are “affected” by an event
+// Map which assets are "affected" by an event.
+// Currently a placeholder: 20_staging_transform.sql CROSS JOINs every event to
+// every asset with weight = 1.0, to be replaced by real mapping logic (Phase E).
 Table staging.event_asset_map {
   event_id      bigint [not null]
   asset_id      bigint [not null]
@@ -111,11 +122,13 @@ Table staging.event_asset_map {
 
   Indexes {
     (event_id, asset_id) [pk]
+    (asset_id)                      // ix_event_asset_map_asset
   }
 }
 
 // ---------- ANALYTICS LAYER ----------
 
+// Trailing-only windows. Never looks past trading_date.
 Table analytics.features_daily {
   asset_id       bigint [not null]
   trading_date   date [not null]
@@ -125,13 +138,14 @@ Table analytics.features_daily {
   vol_20d        double
   mom_5d         double
   mom_20d        double
-  drawdown_60d   double
+  drawdown_60d   double             // longest lookback; EMBARGO_DAYS must match it
 
   Indexes {
     (asset_id, trading_date) [pk]
   }
 }
 
+// The only table allowed to look forward, via LEAD(close).
 Table analytics.labels_daily {
   asset_id            bigint [not null]
   trading_date        date [not null]
@@ -146,6 +160,22 @@ Table analytics.labels_daily {
   }
 }
 
+// Experiment log: one row per walk-forward fold, distinguished by its date
+// ranges. Append-only within a warehouse generation.
+Table analytics.model_runs {
+  model_run_id          bigint [pk, increment]
+  model_name            text [not null]
+  feature_set_version   text [not null]
+  train_start           date [not null]
+  train_end             date [not null]
+  test_start            date
+  test_end              date
+  git_commit            text
+  created_at            timestamptz
+}
+
+// Out-of-sample (test) rows only. There is no train/test marker column, so
+// writing in-sample rows would silently corrupt any downstream backtest.
 Table analytics.model_predictions {
   model_run_id     bigint [not null]
   asset_id         bigint [not null]
@@ -159,12 +189,48 @@ Table analytics.model_predictions {
   Indexes {
     (model_run_id, asset_id, trading_date) [pk]
   }
+  // CHECK model_predictions_prob_bounds: p_up and p_large_move both in [0, 1]
 }
 
-Table analytics.backtest_results {
+// One row per (model run, position rule, cost assumption). strategy exists
+// because the point of the backtest is comparison: the same predictions must be
+// runnable through a threshold rule and through an always-long benchmark.
+// cost_bps is recorded rather than remembered -- a net_return means nothing
+// without the cost charged to produce it.
+Table analytics.backtest_runs {
+  backtest_run_id  bigint [pk, increment]
   model_run_id     bigint [not null]
+  strategy         text [not null]
+  cost_bps         double [not null]
+
+  n_days           integer
+  n_trades         integer
+  total_return     double
+  sharpe           double
+  max_drawdown     double
+  hit_rate         double
+  expectancy       double
+
+  git_commit       text
+  created_at       timestamptz
+
+  Indexes {
+    (model_run_id, strategy)         // ix_backtest_runs_model
+  }
+  // CHECK backtest_runs_hit_rate_bounds: hit_rate IS NULL OR hit_rate in [0, 1]
+  // CHECK backtest_runs_drawdown_sign: max_drawdown IS NULL OR max_drawdown <= 0
+  // CHECK backtest_runs_cost_nonneg: cost_bps >= 0
+}
+
+// The daily series behind one backtest_runs row. turnover and avg_position are
+// stored, not just the returns, so the cost deduction is auditable:
+// sql/90_assertions.sql re-derives net_return = gross_return - turnover*cost_bps/10000.
+Table analytics.backtest_results {
+  backtest_run_id  bigint [not null]
   trading_date     date [not null]
 
+  avg_position     double
+  turnover         double
   gross_return     double
   net_return       double
   cum_return       double
@@ -174,31 +240,25 @@ Table analytics.backtest_results {
   sharpe_rolling   double
 
   Indexes {
-    (model_run_id, trading_date) [pk]
+    (backtest_run_id, trading_date) [pk]
   }
+  // ix_backtest_run_date duplicates the primary key above; it is redundant.
+  // CHECK backtest_results_turnover_nonneg: turnover IS NULL OR turnover >= 0
+  // CHECK backtest_results_drawdown_sign: drawdown IS NULL OR drawdown <= 0
 }
 
-Table analytics.model_runs {
-  model_run_id          bigint [pk, increment]
-  model_name            text [not null]
-  feature_set_version   text [not null]
-  train_start           date [not null]
-  train_end             date [not null]
-  test_start            date
-  test_end              date
-  git_commit            text
-  created_at            timestamptz
-}
+// Not a table, so it has no box above: analytics.v_training_dataset
+// (sql/50_training_dataset.sql) joins features_daily to labels_daily on
+// (asset_id, trading_date) and drops every row with a NULL feature or label.
+// It is the dataset the model actually trains on.
 
-// --------- RELATIONSHIPS ---------
+// --------- RELATIONSHIPS (foreign keys in sql/00_schema.sql) ---------
 
-Ref: raw.assets.symbol < raw.prices_daily.symbol
+Ref: raw.prices_daily.symbol > raw.assets.symbol
 
-Ref: staging.assets.symbol < raw.assets.symbol
 Ref: staging.prices_daily.asset_id > staging.assets.asset_id
-
-Ref: staging.events.event_id < staging.event_asset_map.event_id
-Ref: staging.assets.asset_id < staging.event_asset_map.asset_id
+Ref: staging.event_asset_map.event_id > staging.events.event_id
+Ref: staging.event_asset_map.asset_id > staging.assets.asset_id
 
 Ref: analytics.features_daily.asset_id > staging.assets.asset_id
 Ref: analytics.labels_daily.asset_id > staging.assets.asset_id
@@ -206,4 +266,10 @@ Ref: analytics.labels_daily.asset_id > staging.assets.asset_id
 Ref: analytics.model_predictions.model_run_id > analytics.model_runs.model_run_id
 Ref: analytics.model_predictions.asset_id > staging.assets.asset_id
 
-Ref: analytics.backtest_results.model_run_id > analytics.model_runs.model_run_id
+Ref: analytics.backtest_runs.model_run_id > analytics.model_runs.model_run_id
+Ref: analytics.backtest_results.backtest_run_id > analytics.backtest_runs.backtest_run_id
+
+// raw.assets -> staging.assets and raw.prices_daily -> staging.prices_daily are
+// NOT foreign keys. staging is rebuilt from raw by 20_staging_transform.sql,
+// which resolves symbol -> asset_id. That is a transformation edge, and an
+// earlier version of this file wrongly drew it as a Ref.
